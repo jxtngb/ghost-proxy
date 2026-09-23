@@ -3,5 +3,5 @@ package main
 import "log"
 
 func main() {
-    log.Println("Ghost Protocol client starting...")
+	log.Println("Ghost Protocol client starting...")
 }
