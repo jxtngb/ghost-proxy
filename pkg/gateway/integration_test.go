@@ -3,11 +3,14 @@
 // black-box (external test package, importing only exported APIs) because
 // their purpose is to catch problems that live in the SEAMS between
 // pkg/crypto, pkg/frame, and pkg/gateway - problems that each package's own
-// unit tests, written against that package alone, structurally cannot see.
+// unit tests, and gateway's own handshake_test.go/server_test.go/auth_test.go,
+// structurally cannot see because they only exercise one layer at a time.
 //
 // This is the Day 3 "crypto integration tests" deliverable (owner map:
-// Member D). It complements, and does not duplicate, Rohith's unit tests in
-// pkg/crypto/*_test.go.
+// Member D). Tests already covered by Yedu's handshake_test.go (valid
+// handshake, wrong PSK, wrong frame type, timeout) are intentionally NOT
+// duplicated here. Everything below exercises something none of the
+// existing per-file test suites do.
 package gateway_test
 
 import (
@@ -21,8 +24,7 @@ import (
 	"github.com/jxtngb/ghost-proxy/pkg/gateway"
 )
 
-// newPipe returns a connected pair of in-memory net.Conns and registers
-// cleanup, standing in for a real TCP connection between client and server.
+// newPipe returns a connected pair of in-memory net.Conns and registers cleanup.
 func newPipe(t *testing.T) (serverConn, clientConn net.Conn) {
 	t.Helper()
 	serverConn, clientConn = net.Pipe()
@@ -35,21 +37,13 @@ func newPipe(t *testing.T) (serverConn, clientConn net.Conn) {
 
 // clientHandshake performs the CLIENT side of the authentication handshake
 // over conn, mirroring the wire sequence documented in
-// pkg/gateway/handshake.go:
-//
-//	server -> client: TypeAuthChallenge, 32-byte challenge (sent in cleartext)
-//	client -> server: TypeAuthResponse, AEAD(dataKey, HMAC(authKey, challenge))
-//
-// No client-side implementation exists yet elsewhere in the repo (Day 6
-// integrates the real client), so this function IS the reference client
-// used to validate the server's handshake logic end to end.
-//
-// tamper, if non-nil, is applied to the outgoing response frame immediately
-// before it is written, so individual tests can corrupt exactly one field.
+// pkg/gateway/handshake.go. tamper, if non-nil, is applied to the outgoing
+// response frame immediately before it is written, so individual tests can
+// corrupt exactly one field of an otherwise-correct handshake.
 func clientHandshake(t *testing.T, conn net.Conn, psk, exporter []byte, tamper func(f *frame.Frame)) error {
 	t.Helper()
 
-	_, authKey, err := crypto.DeriveSessionKeys(psk, exporter)
+	dataKey, authKey, err := crypto.DeriveSessionKeys(psk, exporter)
 	if err != nil {
 		return err
 	}
@@ -68,10 +62,6 @@ func clientHandshake(t *testing.T, conn net.Conn, psk, exporter []byte, tamper f
 		return err
 	}
 
-	dataKey, _, err := crypto.DeriveSessionKeys(psk, exporter)
-	if err != nil {
-		return err
-	}
 	aead, err := crypto.NewAEAD(dataKey)
 	if err != nil {
 		return err
@@ -101,58 +91,7 @@ func clientHandshake(t *testing.T, conn net.Conn, psk, exporter []byte, tamper f
 	return frame.WriteFrame(conn, out)
 }
 
-// --- Handshake integration tests -------------------------------------------
-
-func TestIntegration_FullHandshake_Success(t *testing.T) {
-	psk := []byte("shared-pre-shared-key-material")
-	exporter := []byte("tls-exporter-material-for-this-connection")
-
-	serverConn, clientConn := newPipe(t)
-
-	session, err := gateway.NewAuthSession(psk, exporter)
-	if err != nil {
-		t.Fatalf("NewAuthSession returned error: %v", err)
-	}
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- session.Authenticate(serverConn) }()
-
-	if err := clientHandshake(t, clientConn, psk, exporter, nil); err != nil {
-		t.Fatalf("client handshake failed: %v", err)
-	}
-
-	if err := <-errCh; err != nil {
-		t.Fatalf("expected successful authentication, got error: %v", err)
-	}
-}
-
-func TestIntegration_FullHandshake_WrongPSK_Fails(t *testing.T) {
-	serverPSK := []byte("correct-psk")
-	clientPSK := []byte("attacker-guessed-wrong-psk")
-	exporter := []byte("tls-exporter-material")
-
-	serverConn, clientConn := newPipe(t)
-
-	session, err := gateway.NewAuthSession(serverPSK, exporter)
-	if err != nil {
-		t.Fatalf("NewAuthSession returned error: %v", err)
-	}
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- session.Authenticate(serverConn) }()
-
-	if err := clientHandshake(t, clientConn, clientPSK, exporter, nil); err != nil {
-		t.Fatalf("unexpected client-side error building the (wrong-keyed) response: %v", err)
-	}
-
-	err = <-errCh
-	if err == nil {
-		t.Fatal("expected authentication to fail when client uses the wrong PSK, got nil error")
-	}
-	if !errors.Is(err, gateway.ErrAuthFailed) {
-		t.Errorf("expected ErrAuthFailed, got: %v", err)
-	}
-}
+// --- Handshake tamper-detection tests not covered elsewhere -----------------
 
 func TestIntegration_FullHandshake_TamperedCiphertext_Fails(t *testing.T) {
 	psk := []byte("shared-psk")
@@ -197,37 +136,6 @@ func TestIntegration_FullHandshake_TamperedNonce_Fails(t *testing.T) {
 
 	if err := <-errCh; !errors.Is(err, gateway.ErrAuthFailed) {
 		t.Errorf("expected ErrAuthFailed for tampered nonce, got: %v", err)
-	}
-}
-
-func TestIntegration_FullHandshake_WrongFrameType_Fails(t *testing.T) {
-	psk := []byte("shared-psk")
-	exporter := []byte("exporter-material")
-
-	serverConn, clientConn := newPipe(t)
-	session, err := gateway.NewAuthSession(psk, exporter)
-	if err != nil {
-		t.Fatalf("NewAuthSession returned error: %v", err)
-	}
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- session.Authenticate(serverConn) }()
-
-	if _, err := frame.ReadFrame(clientConn); err != nil {
-		t.Fatalf("ReadFrame (challenge) returned error: %v", err)
-	}
-
-	// Send a structurally valid frame of the WRONG type instead of a real response.
-	if err := frame.WriteFrame(clientConn, &frame.Frame{
-		Type:       frame.TypeDataPayload,
-		Nonce:      [frame.NonceSize]byte{},
-		Ciphertext: []byte("not a real auth response"),
-	}); err != nil {
-		t.Fatalf("WriteFrame returned error: %v", err)
-	}
-
-	if err := <-errCh; !errors.Is(err, gateway.ErrAuthFailed) {
-		t.Errorf("expected ErrAuthFailed for wrong frame type, got: %v", err)
 	}
 }
 
@@ -298,11 +206,17 @@ func TestIntegration_FullHandshake_TypeConfusion_Fails(t *testing.T) {
 	}
 }
 
-// TestIntegration_FullHandshake_ReplayedResponse_Fails checks a security
-// property that spans the whole session lifecycle - challenge freshness -
-// which no single package's unit tests can exercise, since it requires two
-// full handshake attempts against the same PSK/exporter pair.
-func TestIntegration_FullHandshake_ReplayedResponse_Fails(t *testing.T) {
+// TestIntegration_CapturedResponseReplayAcrossSessions_Fails is distinct from
+// gateway's own TestHandshakeReplayedResponseFails: that test sends a
+// response computed for an arbitrary WRONG challenge value within a single
+// handshake attempt. This test runs two REAL, independently-completed
+// handshake attempts against the same PSK/exporter pair, captures the exact
+// wire bytes of a genuinely valid response frame from the first, and replays
+// those captured bytes verbatim against the second handshake's fresh
+// challenge - a truer simulation of an attacker recording and replaying
+// real traffic, and a property that only shows up across two full session
+// lifecycles, not within one.
+func TestIntegration_CapturedResponseReplayAcrossSessions_Fails(t *testing.T) {
 	psk := []byte("shared-psk")
 	exporter := []byte("exporter-material")
 
@@ -380,16 +294,18 @@ func TestIntegration_FullHandshake_ReplayedResponse_Fails(t *testing.T) {
 	}
 
 	if err := <-errCh2; !errors.Is(err, gateway.ErrAuthFailed) {
-		t.Errorf("expected ErrAuthFailed for a replayed response against a new challenge, got: %v", err)
+		t.Errorf("expected ErrAuthFailed for a captured response replayed against a new challenge, got: %v", err)
 	}
 }
 
-// --- Post-handshake data channel integration tests --------------------------
+// --- Post-handshake data channel integration tests (not covered elsewhere) --
 
 // TestIntegration_DataChannel_RoundTrip exercises the full tunnel-traffic
 // pipeline a real connection would use after a successful handshake:
 // EncodePayload -> Seal -> WriteFrame -> (wire) -> ReadFrame -> Open ->
 // DecodePayload, using the same DataKey a real AuthSession would hand off.
+// Nothing in the existing test suites exercises pkg/frame's payload envelope
+// together with pkg/crypto's AEAD and a real AuthSession-derived key.
 func TestIntegration_DataChannel_RoundTrip(t *testing.T) {
 	psk := []byte("shared-psk")
 	exporter := []byte("exporter-material")
