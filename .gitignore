@@ -1,0 +1,4 @@
+
+# Local TLS test credentials
+configs/server.crt
+configs/server.key
