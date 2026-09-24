@@ -329,5 +329,3 @@ func TestAuthOverRealTLS_WrongPSK_Fails(t *testing.T) {
 		t.Errorf("expected gateway.ErrAuthFailed for mismatched PSK over real TLS, got: %v", authErr)
 	}
 }
-
-
