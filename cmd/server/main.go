@@ -75,5 +75,4 @@ func run() error {
 
 	logger.Info("gateway listening", "addr", ln.Addr().String())
 	return srv.Serve(ln)
-	log.Println("Ghost Protocol server starting...")
 }
