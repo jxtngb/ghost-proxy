@@ -4,22 +4,51 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
+	utls "github.com/refraction-networking/utls"
+
 	"github.com/jxtngb/ghost-proxy/pkg/config"
 	"github.com/jxtngb/ghost-proxy/pkg/gateway"
 	"github.com/jxtngb/ghost-proxy/pkg/logger"
+	"github.com/jxtngb/ghost-proxy/pkg/transport"
 )
 
 const minPSKLen = 16
 
-// stubExporter stands in for real TLS exporter material until Day 4.
-// Client and gateway must use the same value for the handshake to pass.
-func stubExporter(net.Conn) ([]byte, error) {
-	return []byte("ghost-proxy-day3-placeholder-exporter"), nil
+type tlsListener struct {
+	net.Listener
+	Config *utls.Config
+}
+
+func (l *tlsListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+
+	tlsConn, err := transport.TLSServer(conn, l.Config)
+	if err != nil {
+		return nil, err
+	}
+
+	return tlsConn, nil
+}
+
+func exportServerKeyingMaterial(conn net.Conn) ([]byte, error) {
+	tlsConn, ok := conn.(*utls.Conn)
+	if !ok {
+		return nil, fmt.Errorf(
+			"ghost-proxy: expected TLS connection, got %T",
+			conn,
+		)
+	}
+
+	return transport.ExportServerKeyingMaterial(tlsConn)
 }
 
 func main() {
@@ -50,9 +79,19 @@ func run() error {
 		return errors.New("GHOST_PSK must be set and at least 16 characters")
 	}
 
-	ln, err := net.Listen("tcp", cfg.ListenAddress)
+	tlsConfig, err := transport.TLSServerConfig(cfg.CertFile, cfg.KeyFile)
 	if err != nil {
 		return err
+	}
+
+	rawLn, err := net.Listen("tcp", cfg.ListenAddress)
+	if err != nil {
+		return err
+	}
+
+	ln := &tlsListener{
+		Listener: rawLn,
+		Config:   tlsConfig,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -66,7 +105,7 @@ func run() error {
 
 	srv := &gateway.Server{
 		PSK:      []byte(psk),
-		Exporter: stubExporter,
+		Exporter: exportServerKeyingMaterial,
 		OnAuthenticated: func(conn net.Conn, _ *gateway.AuthSession) {
 			// Tunnel / TCP forwarding arrives on Day 5-7.
 			logger.Info(
