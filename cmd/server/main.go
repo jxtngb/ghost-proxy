@@ -57,6 +57,7 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutting down")
@@ -68,7 +69,11 @@ func run() error {
 		Exporter: stubExporter,
 		OnAuthenticated: func(conn net.Conn, _ *gateway.AuthSession) {
 			// Tunnel / TCP forwarding arrives on Day 5-7.
-			logger.Info("authenticated connection (no tunnel yet)", "remote", conn.RemoteAddr().String())
+			logger.Info(
+				"authenticated connection (no tunnel yet)",
+				"remote",
+				conn.RemoteAddr().String(),
+			)
 			conn.Close()
 		},
 	}
