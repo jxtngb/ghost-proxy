@@ -28,7 +28,7 @@ func TestConnectToTarget(t *testing.T) {
 	}
 
 	conn, err := connectToTarget(request, func(address string) (net.Conn, error) {
-    	return net.Dial("tcp", address)
+		return net.Dial("tcp", address)
 	})
 	if err != nil {
 		t.Fatalf("connectToTarget failed: %v", err)
