@@ -60,7 +60,9 @@ func TestFullSOCKS5Connection(t *testing.T) {
 
 		defer conn.Close()
 
-		if err := handleConnection(conn); err != nil {
+		if err := handleConnection(conn, func(address string) (net.Conn, error) {
+			return net.Dial("tcp", address)
+		}); err != nil {
 			t.Errorf("handleConnection failed: %v", err)
 		}
 	}()
