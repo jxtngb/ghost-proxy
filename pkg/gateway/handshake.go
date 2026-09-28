@@ -70,5 +70,9 @@ func (s *AuthSession) Authenticate(conn net.Conn) error {
 	if err != nil || !ok {
 		return ErrAuthFailed
 	}
+
+	if err := frame.WriteFrame(conn, &frame.Frame{Type: frame.TypeAuthSuccess}); err != nil {
+		return fmt.Errorf("gateway: send authentication success: %w", err)
+	}
 	return nil
 }
