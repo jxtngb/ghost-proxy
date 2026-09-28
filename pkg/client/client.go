@@ -143,11 +143,23 @@ func authenticate(conn net.Conn, dataKey, authKey []byte) error {
 	var nonceArray [frame.NonceSize]byte
 	copy(nonceArray[:], nonce)
 
-	return frame.WriteFrame(conn, &frame.Frame{
+	if err := frame.WriteFrame(conn, &frame.Frame{
 		Type:       frame.TypeAuthResponse,
 		Nonce:      nonceArray,
 		Ciphertext: ciphertext,
-	})
+	}); err != nil {
+		return fmt.Errorf("write authentication response: %w", err)
+	}
+
+	ack, err := frame.ReadFrame(conn)
+	if err != nil {
+		return fmt.Errorf("read authentication result: %w", err)
+	}
+	if ack.Type != frame.TypeAuthSuccess {
+		return fmt.Errorf("authentication rejected")
+	}
+
+	return nil
 }
 
 type DataConn struct {
