@@ -95,6 +95,13 @@ func TestHandshakeValid(t *testing.T) {
 	cli, done := hsStartServer(t, hsPSK, hsExporter)
 	ch := hsReadChallenge(t, cli)
 	hsSendResponse(t, cli, hsPSK, hsExporter, ch, frame.TypeAuthResponse)
+	ack, err := frame.ReadFrame(cli)
+	if err != nil {
+		t.Fatalf("read auth success: %v", err)
+	}
+	if ack.Type != frame.TypeAuthSuccess {
+		t.Fatalf("got frame type 0x%02x, want auth success", ack.Type)
+	}
 	if err := hsWait(t, done); err != nil {
 		t.Fatalf("valid client rejected: %v", err)
 	}
