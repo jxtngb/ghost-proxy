@@ -284,6 +284,9 @@ func TestIntegration_CapturedResponseReplayAcrossSessions_Fails(t *testing.T) {
 	if err := frame.WriteFrame(clientConn1, replayFrame); err != nil {
 		t.Fatalf("WriteFrame returned error: %v", err)
 	}
+	if _, err := frame.ReadFrame(clientConn1); err != nil {
+		t.Fatalf("read authentication success: %v", err)
+	}
 	if err := <-errCh1; err != nil {
 		t.Fatalf("expected first handshake to succeed, got error: %v", err)
 	}
