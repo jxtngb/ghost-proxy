@@ -169,7 +169,7 @@ while True:
     Wait-TcpPort "127.0.0.1" 1080
 
     Write-Host "Testing incorrect PSK..."
-    $replyCode = Invoke-Socks5Request "127.0.0.1" 18080 "" $false | Out-Null
+    $replyCode = Invoke-Socks5Request "127.0.0.1" 18080 "" $false
     if ($replyCode -eq 0) {
         throw "Wrong PSK unexpectedly succeeded"
     }
