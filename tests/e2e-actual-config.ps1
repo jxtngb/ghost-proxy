@@ -12,9 +12,12 @@ $wrongPsk = "ffeeddccbbaa99887766554433221100"
 $serverExe = Join-Path $env:TEMP "ghost-proxy-e2e-server.exe"
 $clientExe = Join-Path $env:TEMP "ghost-proxy-e2e-client.exe"
 $targetScript = Join-Path $env:TEMP "ghost-proxy-e2e-target.py"
-$serverLog = Join-Path $env:TEMP "ghost-proxy-e2e-server.log"
-$clientLog = Join-Path $env:TEMP "ghost-proxy-e2e-client.log"
-$targetLog = Join-Path $env:TEMP "ghost-proxy-e2e-target.log"
+$serverOut = Join-Path $env:TEMP "ghost-proxy-e2e-server.out.log"
+$serverErr = Join-Path $env:TEMP "ghost-proxy-e2e-server.err.log"
+$clientOut = Join-Path $env:TEMP "ghost-proxy-e2e-client.out.log"
+$clientErr = Join-Path $env:TEMP "ghost-proxy-e2e-client.err.log"
+$targetOut = Join-Path $env:TEMP "ghost-proxy-e2e-target.out.log"
+$targetErr = Join-Path $env:TEMP "ghost-proxy-e2e-target.err.log"
 $serverProcess = $null
 $clientProcess = $null
 $targetProcess = $null
@@ -100,26 +103,26 @@ while True:
     try:
         data = conn.recv(4096)
         if data:
-            conn.sendall(b"HTTP/1.1 200 OK\r\n" + b"Content-Length: 12\r\n" + b"Connection: close\r\n\r\n" + b"GHOST-E2E-OK")
+            conn.sendall(b"HTTP/1.1 200 OK\\r\\n" + b"Content-Length: 12\\r\\n" + b"Connection: close\\r\\n\\r\\n" + b"GHOST-E2E-OK")
     finally:
         conn.close()
 '@
 
     Set-Content -Path $targetScript -Value $targetCode -Encoding UTF8
-    Remove-Item $serverLog, $clientLog, $targetLog -Force -ErrorAction SilentlyContinue
+    Remove-Item $serverOut, $serverErr, $clientOut, $clientErr, $targetOut, $targetErr -Force -ErrorAction SilentlyContinue
 
     Write-Host "Starting controlled destination on 127.0.0.1:18080..."
-    $targetProcess = Start-Process -FilePath "python" -ArgumentList @($targetScript) -RedirectStandardOutput $targetLog -RedirectStandardError $targetLog -PassThru
+    $targetProcess = Start-Process -FilePath "python" -ArgumentList @($targetScript) -RedirectStandardOutput $targetOut -RedirectStandardError $targetErr -PassThru
     Wait-TcpPort "127.0.0.1" 18080
 
     Write-Host "Starting actual Ghost server using configs/server.yaml..."
     $env:GHOST_PSK = $psk
-    $serverProcess = Start-Process -FilePath $serverExe -WorkingDirectory $repo -RedirectStandardOutput $serverLog -RedirectStandardError $serverLog -PassThru
+    $serverProcess = Start-Process -FilePath $serverExe -WorkingDirectory $repo -RedirectStandardOutput $serverOut -RedirectStandardError $serverErr -PassThru
     Wait-TcpPort "127.0.0.1" 443
 
     Write-Host "Starting actual Ghost client..."
     $env:GHOST_PSK = $psk
-    $clientProcess = Start-Process -FilePath $clientExe -WorkingDirectory $repo -RedirectStandardOutput $clientLog -RedirectStandardError $clientLog -PassThru
+    $clientProcess = Start-Process -FilePath $clientExe -WorkingDirectory $repo -RedirectStandardOutput $clientOut -RedirectStandardError $clientErr -PassThru
     Wait-TcpPort "127.0.0.1" 1080
 
     Write-Host "Testing matching PSK..."
@@ -135,7 +138,7 @@ while True:
 
     Write-Host "Starting client with incorrect PSK..."
     $env:GHOST_PSK = $wrongPsk
-    $clientProcess = Start-Process -FilePath $clientExe -WorkingDirectory $repo -RedirectStandardOutput $clientLog -RedirectStandardError $clientLog -PassThru
+    $clientProcess = Start-Process -FilePath $clientExe -WorkingDirectory $repo -RedirectStandardOutput $clientOut -RedirectStandardError $clientErr -PassThru
     Wait-TcpPort "127.0.0.1" 1080
 
     Write-Host "Testing incorrect PSK..."
