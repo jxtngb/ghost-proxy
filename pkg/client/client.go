@@ -38,8 +38,8 @@ func FromEnvironment(serverAddress, serverName string) (*Client, error) {
 		return nil, fmt.Errorf("decode GHOST_PSK: %w", err)
 	}
 
-	if len(psk) == 0 {
-		return nil, fmt.Errorf("GHOST_PSK is empty")
+	if len(psk) < 16 {
+		return nil, fmt.Errorf("GHOST_PSK must decode to at least 16 bytes")
 	}
 
 	return New(serverAddress, serverName, psk), nil
