@@ -26,6 +26,7 @@ const (
 	TypeAuthChallenge byte = 0x01
 	TypeAuthResponse  byte = 0x02
 	TypeDataPayload   byte = 0x03
+	TypeConnOpen      byte = 0x05
 	TypeConnClose     byte = 0x04
 )
 
@@ -51,7 +52,7 @@ type Frame struct {
 // IsValidType reports whether t is one of the defined frame types.
 func IsValidType(t byte) bool {
 	switch t {
-	case TypeAuthChallenge, TypeAuthResponse, TypeDataPayload, TypeConnClose:
+	case TypeAuthChallenge, TypeAuthResponse, TypeDataPayload, TypeConnOpen, TypeConnClose:
 		return true
 	default:
 		return false

@@ -87,6 +87,11 @@ func (c *Client) Dial(address string) (net.Conn, error) {
 		return nil, err
 	}
 
+	if err := channel.WriteConnectFrame(tlsConn, address); err != nil {
+		tlsConn.Close()
+		return nil, fmt.Errorf("send target: %w", err)
+	}
+
 	return &DataConn{
 		conn:    tlsConn,
 		channel: channel,

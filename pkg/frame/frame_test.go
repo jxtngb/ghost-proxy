@@ -131,7 +131,7 @@ func TestReadFrameTruncatedCiphertext(t *testing.T) {
 }
 
 func TestIsValidType(t *testing.T) {
-	valid := []byte{TypeAuthChallenge, TypeAuthResponse, TypeDataPayload, TypeConnClose}
+	valid := []byte{TypeAuthChallenge, TypeAuthResponse, TypeDataPayload, TypeConnOpen, TypeConnClose}
 
 	for _, ty := range valid {
 		if !IsValidType(ty) {
@@ -143,7 +143,4 @@ func TestIsValidType(t *testing.T) {
 		t.Error("expected 0x00 to be invalid")
 	}
 
-	if IsValidType(0x05) {
-		t.Error("expected 0x05 to be invalid")
-	}
 }
