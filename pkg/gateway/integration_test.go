@@ -88,7 +88,21 @@ func clientHandshake(t *testing.T, conn net.Conn, psk, exporter []byte, tamper f
 		tamper(out)
 	}
 
-	return frame.WriteFrame(conn, out)
+	if err := frame.WriteFrame(conn, out); err != nil {
+		return err
+	}
+
+	if tamper == nil {
+		ack, err := frame.ReadFrame(conn)
+		if err != nil {
+			return err
+		}
+		if ack.Type != frame.TypeAuthSuccess {
+			t.Fatalf("expected TypeAuthSuccess (0x%02x), got 0x%02x", frame.TypeAuthSuccess, ack.Type)
+		}
+	}
+
+	return nil
 }
 
 // --- Handshake tamper-detection tests not covered elsewhere -----------------
