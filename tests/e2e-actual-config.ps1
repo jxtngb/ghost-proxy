@@ -129,7 +129,7 @@ function Invoke-Socks5Request([string]$TargetHost, [int]$TargetPort, [string]$Re
         }
         if ($reply[1] -eq 0x00) { throw "Wrong PSK unexpectedly succeeded" }
         Write-Host ("Wrong-PSK CONNECT rejected with SOCKS5 reply 0x{0:X2}" -f $reply[1])
-        return $null
+        return [int]$reply[1]
     } finally {
         $tcp.Close()
     }
