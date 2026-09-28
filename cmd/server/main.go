@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -73,10 +74,18 @@ func run() error {
 	if cfg.ListenAddress == "" {
 		return errors.New("no listen address configured")
 	}
+	pskHex := os.Getenv("GHOST_PSK")
+	if pskHex == "" {
+		return errors.New("GHOST_PSK must be set")
+	}
 
-	psk := os.Getenv("GHOST_PSK")
-	if len(psk) < minPSKLen {
-		return errors.New("GHOST_PSK must be set and at least 16 characters")
+	psk, err := hex.DecodeString(pskHex)
+	if err != nil {
+		return fmt.Errorf("decode GHOST_PSK: %w", err)
+	}
+
+	if len(psk) < 16 {
+		return errors.New("GHOST_PSK must decode to at least 16 bytes")
 	}
 
 	tlsConfig, err := transport.TLSServerConfig(cfg.CertFile, cfg.KeyFile)
