@@ -62,6 +62,24 @@ function Wait-TcpPortClosed([string]$HostName, [int]$Port, [int]$TimeoutSeconds 
     throw "Port $Port is still accepting connections"
 }
 
+function Stop-TestClientAndWait([System.Diagnostics.Process]$Process, [string]$ExecutablePath) {
+    if ($Process -and -not $Process.HasExited) {
+        Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+        try { $Process.WaitForExit(5000) } catch {}
+    }
+
+    $normalizedPath = [System.IO.Path]::GetFullPath($ExecutablePath)
+
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.ExecutablePath -and
+            ([System.IO.Path]::GetFullPath($_.ExecutablePath) -eq $normalizedPath)
+        } |
+        ForEach-Object {
+            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+}
+
 function Read-Exact([System.Net.Sockets.NetworkStream]$Stream, [int]$Length) {
     $buffer = New-Object byte[] $Length
     $offset = 0
@@ -155,12 +173,10 @@ while True:
     Write-Host "PASS: matching PSK completed the full application path."
 
     Write-Host "Stopping client before wrong-PSK test..."
-    Stop-Process -Id $clientProcess.Id -Force
+    Stop-TestClientAndWait $clientProcess $clientExe
     $clientProcess = $null
 
-    # A stopped process may leave the listening socket reachable briefly.
-    # Wait until port 1080 is actually closed so the negative test cannot hit
-    # the previous client instance.
+    # Ensure no stale test client is still listening on 1080.
     Wait-TcpPortClosed "127.0.0.1" 1080
 
     Write-Host "Starting client with incorrect PSK..."
