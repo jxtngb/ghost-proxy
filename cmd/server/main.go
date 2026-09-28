@@ -115,14 +115,30 @@ func run() error {
 	srv := &gateway.Server{
 		PSK:      []byte(psk),
 		Exporter: exportServerKeyingMaterial,
-		OnAuthenticated: func(conn net.Conn, _ *gateway.AuthSession) {
-			// Tunnel / TCP forwarding arrives on Day 5-7.
-			logger.Info(
-				"authenticated connection (no tunnel yet)",
-				"remote",
-				conn.RemoteAddr().String(),
-			)
-			conn.Close()
+		OnAuthenticated: func(conn net.Conn, session *gateway.AuthSession) {
+			defer conn.Close()
+
+			targetInfo := "authenticated connection"
+			if remote := conn.RemoteAddr(); remote != nil {
+				targetInfo += " remote=" + remote.String()
+			}
+
+			logger.Info(targetInfo)
+
+			if err := gateway.ServeTunnel(conn, session); err != nil {
+				target := conn.RemoteAddr()
+				if target != nil {
+					logger.Warn(
+						"tunnel ended",
+						"remote",
+						target.String(),
+						"error",
+						err,
+					)
+				} else {
+					logger.Warn("tunnel ended", "error", err)
+				}
+			}
 		},
 	}
 
