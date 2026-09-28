@@ -39,6 +39,29 @@ function Wait-TcpPort([string]$HostName, [int]$Port, [int]$TimeoutSeconds = 10) 
     throw "Timed out waiting for port $Port"
 }
 
+function Wait-TcpPortClosed([string]$HostName, [int]$Port, [int]$TimeoutSeconds = 10) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $connected = $false
+        try {
+            $client = New-Object System.Net.Sockets.TcpClient
+            $task = $client.ConnectAsync($HostName, $Port)
+            $connected = $task.Wait(250) -and $client.Connected
+            $client.Close()
+        } catch {
+            $connected = $false
+        }
+
+        if (-not $connected) {
+            return
+        }
+
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    throw "Port $Port is still accepting connections"
+}
+
 function Read-Exact([System.Net.Sockets.NetworkStream]$Stream, [int]$Length) {
     $buffer = New-Object byte[] $Length
     $offset = 0
@@ -134,7 +157,11 @@ while True:
     Write-Host "Stopping client before wrong-PSK test..."
     Stop-Process -Id $clientProcess.Id -Force
     $clientProcess = $null
-    Start-Sleep -Milliseconds 500
+
+    # A stopped process may leave the listening socket reachable briefly.
+    # Wait until port 1080 is actually closed so the negative test cannot hit
+    # the previous client instance.
+    Wait-TcpPortClosed "127.0.0.1" 1080
 
     Write-Host "Starting client with incorrect PSK..."
     $env:GHOST_PSK = $wrongPsk
@@ -142,8 +169,11 @@ while True:
     Wait-TcpPort "127.0.0.1" 1080
 
     Write-Host "Testing incorrect PSK..."
-    Invoke-Socks5Request "127.0.0.1" 18080 "" $false | Out-Null
-    Write-Host "PASS: incorrect PSK was rejected."
+    $replyCode = Invoke-Socks5Request "127.0.0.1" 18080 "" $false | Out-Null
+    if ($replyCode -eq 0) {
+        throw "Wrong PSK unexpectedly succeeded"
+    }
+    Write-Host ("PASS: incorrect PSK was rejected with SOCKS5 reply 0x{0:X2}." -f $replyCode)
     Write-Host ""
     Write-Host "ACTUAL-CONFIG E2E TEST: PASS"
 }
