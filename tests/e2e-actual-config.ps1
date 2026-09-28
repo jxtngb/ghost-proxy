@@ -103,7 +103,7 @@ while True:
     try:
         data = conn.recv(4096)
         if data:
-            conn.sendall(b"HTTP/1.1 200 OK\\r\\n" + b"Content-Length: 12\\r\\n" + b"Connection: close\\r\\n\\r\\n" + b"GHOST-E2E-OK")
+            conn.sendall(b"HTTP/1.1 200 OK\r\n" + b"Content-Length: 12\r\n" + b"Connection: close\r\n\r\n" + b"GHOST-E2E-OK")
     finally:
         conn.close()
 '@
