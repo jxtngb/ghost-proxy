@@ -68,16 +68,28 @@ function Stop-TestClientAndWait([System.Diagnostics.Process]$Process, [string]$E
         try { $Process.WaitForExit(5000) } catch {}
     }
 
-    $normalizedPath = [System.IO.Path]::GetFullPath($ExecutablePath)
-
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.ExecutablePath -and
-            ([System.IO.Path]::GetFullPath($_.ExecutablePath) -eq $normalizedPath)
-        } |
+    # The E2E binary has a unique name in TEMP. Kill any leftover instance
+    # explicitly because Win32_Process.ExecutablePath can be unavailable.
+    $processName = [System.IO.Path]::GetFileNameWithoutExtension($ExecutablePath)
+    Get-Process -Name $processName -ErrorAction SilentlyContinue |
         ForEach-Object {
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
         }
+
+    $deadline = (Get-Date).AddSeconds(5)
+    do {
+        $listeners = Get-NetTCPConnection -LocalPort 1080 -State Listen -ErrorAction SilentlyContinue
+        if (-not $listeners) { return }
+
+        foreach ($listener in $listeners) {
+            $owner = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+            if ($owner -and $owner.ProcessName -eq $processName) {
+                Stop-Process -Id $owner.Id -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
 }
 
 function Read-Exact([System.Net.Sockets.NetworkStream]$Stream, [int]$Length) {
