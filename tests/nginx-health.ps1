@@ -7,8 +7,8 @@ $container = "ghost-proxy-nginx-health-test"
 $image = "ghost-proxy-nginx-health"
 
 function Cleanup {
-    docker rm -f $container 2>$null | Out-Null
-    docker image rm $image 2>$null | Out-Null
+    docker rm -f $container 2>$null | Out-Null; $global:LASTEXITCODE = 0
+    docker image rm $image 2>$null | Out-Null; $global:LASTEXITCODE = 0
 }
 
 try {
@@ -18,7 +18,7 @@ try {
     Write-Host "Building Nginx image..."
     docker build -t $image .\deployments\nginx
 
-    docker rm -f $container 2>$null | Out-Null
+    docker rm -f $container 2>$null | Out-Null; $global:LASTEXITCODE = 0
 
     Write-Host "Starting Nginx..."
     docker run -d --name $container -p 18080:8080 $image | Out-Null
@@ -71,3 +71,4 @@ catch {
 finally {
     Cleanup
 }
+
