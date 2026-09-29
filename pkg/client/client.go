@@ -59,7 +59,13 @@ func (c *Client) Dial(address string) (net.Conn, error) {
 		return nil, fmt.Errorf("connect to Ghost server: %w", err)
 	}
 
-	tlsConn, err := transport.DialUTLS(raw, c.ServerName)
+	tlsConfig, err := transport.TLSConfigWithRootCA(c.ServerName, "configs/server.crt")
+	if err != nil {
+		raw.Close()
+		return nil, err
+	}
+
+	tlsConn, err := transport.DialUTLSWithConfig(raw, tlsConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +202,7 @@ func (c *DataConn) Write(p []byte) (int, error) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 
-	const maxChunk = 32 * 1024
+	const maxChunk = 1442
 
 	total := 0
 
