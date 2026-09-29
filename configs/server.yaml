@@ -1,2 +1,4 @@
 listen_address: "0.0.0.0:443"
 log_level: "info"
+cert_file: "configs/server.crt"
+key_file: "configs/server.key"

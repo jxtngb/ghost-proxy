@@ -11,6 +11,8 @@ type Config struct {
 	ListenAddress string `yaml:"listen_address"`
 	ServerAddress string `yaml:"server_address"`
 	LogLevel      string `yaml:"log_level"`
+	CertFile      string `yaml:"cert_file"`
+	KeyFile       string `yaml:"key_file"`
 }
 
 func Load(path string) (Config, error) {

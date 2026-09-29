@@ -12,8 +12,11 @@ const (
 	noAuthentication = 0x00
 )
 
+type DialFunc func(address string) (net.Conn, error)
+
 type Server struct {
 	Addr string
+	Dial DialFunc
 }
 
 func (s *Server) Start() error {
@@ -29,6 +32,13 @@ func (s *Server) Start() error {
 
 	fmt.Printf("SOCKS5 server listening on %s\n", s.Addr)
 
+	dial := s.Dial
+	if dial == nil {
+		dial = func(address string) (net.Conn, error) {
+			return net.Dial("tcp", address)
+		}
+	}
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -38,14 +48,14 @@ func (s *Server) Start() error {
 		go func(conn net.Conn) {
 			defer conn.Close()
 
-			if err := handleConnection(conn); err != nil {
+			if err := handleConnection(conn, dial); err != nil {
 				fmt.Printf("SOCKS5 connection failed: %v\n", err)
 			}
 		}(conn)
 	}
 }
 
-func handleConnection(conn net.Conn) error {
+func handleConnection(conn net.Conn, dial DialFunc) error {
 	if err := handleGreeting(conn); err != nil {
 		return fmt.Errorf("greeting: %w", err)
 	}
@@ -55,14 +65,18 @@ func handleConnection(conn net.Conn) error {
 		return fmt.Errorf("request: %w", err)
 	}
 
-	targetConn, err := connectToTarget(request)
+	targetConn, err := connectToTarget(request, dial)
 	if err != nil {
 		if replyErr := sendReply(
 			conn,
 			replyConnectionRefused,
 			&net.TCPAddr{},
 		); replyErr != nil {
-			return fmt.Errorf("connect failed: %w; send reply failed: %v", err, replyErr)
+			return fmt.Errorf(
+				"connect failed: %w; send reply failed: %v",
+				err,
+				replyErr,
+			)
 		}
 
 		return fmt.Errorf("connect to target: %w", err)
