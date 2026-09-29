@@ -51,20 +51,6 @@ Gateway destination forwarding is implemented and is part of the tested applicat
 - A TLS certificate and private key for the gateway
 - A shared hexadecimal PSK in the `GHOST_PSK` environment variable
 
-Check the installed Go version:
-
-```powershell
-go version
-```
-
-## Clone and install dependencies
-
-```powershell
-git clone https://github.com/jxtngb/ghost-proxy.git
-cd ghost-proxy
-go mod download
-```
-
 ## Configuration
 
 ### Server
@@ -78,21 +64,7 @@ cert_file: "configs/server.crt"
 key_file: "configs/server.key"
 ```
 
-You can provide another configuration file with:
-
-```powershell
-go run ./cmd/server -config path/to/server.yaml
-```
-
-The `-listen` option overrides the configured listen address:
-
-```powershell
-go run ./cmd/server -config configs/server.yaml -listen 127.0.0.1:443
-```
-
 ### Client
-
-The client configuration file documents the local SOCKS5 and gateway addresses:
 
 ```yaml
 listen_address: "127.0.0.1:1080"
@@ -100,15 +72,9 @@ server_address: "127.0.0.1:443"
 log_level: "info"
 ```
 
-The current client command uses the application defaults shown in the source, so keep the documented addresses aligned with the local test setup.
-
 ## PSK setup
 
-The client and server must use the same PSK.
-
-The value is supplied as hexadecimal and must decode to at least 16 bytes.
-
-Example:
+The client and server must use the same hexadecimal PSK and it must decode to at least 16 bytes.
 
 ```powershell
 $env:GHOST_PSK = "00112233445566778899aabbccddeeff"
@@ -116,144 +82,74 @@ $env:GHOST_PSK = "00112233445566778899aabbccddeeff"
 
 The PSK itself is never logged by the application.
 
-For a negative authentication test, deliberately use a different hexadecimal value on one side.
-
 ## TLS certificate
 
-The gateway requires a certificate and private key.
+The gateway requires a certificate and private key. For local development, the E2E test uses `configs/server.crt` and `configs/server.key`.
 
-For local development, the repository E2E test uses:
+The certificate must be trusted by the client when normal TLS verification is used. Do not commit private production keys or certificates to a public repository.
 
-```
-configs/server.crt
-configs/server.key
-```
-
-The certificate must be trusted by the client when normal TLS verification is used. The project does not require disabling certificate verification for the E2E flow.
-
-Do not commit private production keys or certificates to a public repository.
-
-For production deployment, use a certificate issued by the appropriate trusted certificate authority and protect the private key with normal operating-system permissions.
-
-## Build
-
-Build all packages and commands:
-
-```powershell
-go build ./...
-```
-
-Run static checks:
-
-```powershell
-go vet ./...
-```
-
-Run the complete Go test suite:
+## Build and regression
 
 ```powershell
 go test ./...
-```
-
-## Run the gateway
-
-From the repository root:
-
-```powershell
-$env:GHOST_PSK = "00112233445566778899aabbccddeeff"
-go run ./cmd/server
-```
-
-The server reads `configs/server.yaml` by default and listens on the configured address.
-
-## Run the client
-
-In a second terminal:
-
-```powershell
-$env:GHOST_PSK = "00112233445566778899aabbccddeeff"
-go run ./cmd/client
-```
-
-The local SOCKS5 listener is expected at:
-
-```
-127.0.0.1:1080
-```
-
-Applications can use that address as their SOCKS5 proxy.
-
-## Controlled end-to-end test
-
-The repository includes an actual configuration E2E test:
-
-```
-tests/e2e-actual-config.ps1
-```
-
-It builds the actual server and client binaries, starts a controlled local destination, starts the actual gateway and client, and verifies the complete application path.
-
-Run it from PowerShell:
-
-```powershell
+go build ./...
+go vet ./...
 powershell -ExecutionPolicy Bypass -File .\tests\e2e-actual-config.ps1
 ```
 
-The test verifies:
-
-1. The configured gateway starts successfully.
-2. The configured client starts successfully.
-3. A SOCKS5 CONNECT request is accepted with the matching PSK.
-4. The request passes through TLS, authentication, gateway forwarding, and the controlled destination.
-5. The controlled destination response reaches the SOCKS5 client.
-6. A client using an incorrect PSK is rejected.
-
-A successful run ends with:
+A successful E2E run ends with:
 
 ```
 ACTUAL-CONFIG E2E TEST: PASS
 ```
 
-## Full regression check
+## Nginx deployment
 
-Before opening or merging a change, run:
+The repository includes a separately configured Nginx service for controlled deployment/testing:
+
+```
+deployments/nginx/
+├── Dockerfile
+├── nginx.conf
+├── index.html
+└── README.md
+```
+
+Build and run it with Docker:
 
 ```powershell
-cd C:\Users\jesti\ghost-proxy
-
-go test ./...
-go build ./...
-go vet ./...
-
-powershell -ExecutionPolicy Bypass -File .\tests\e2e-actual-config.ps1
+docker build -t ghost-proxy-nginx .\deployments\nginx
+docker run --rm -p 8080:8080 ghost-proxy-nginx
 ```
 
-The race-enabled test suite may require a working CGO/C compiler toolchain on Windows. A local race-test compiler failure should be distinguished from a normal `go test ./...` failure.
+Verify it:
 
-## Nginx deployment documentation
-
-The repository contains:
-
-```
-docs/nginx-decoy-setup.md
+```powershell
+curl.exe http://127.0.0.1:8080/
+curl.exe http://127.0.0.1:8080/health
 ```
 
-This document describes the separate Nginx web-server setup used for the project's controlled deployment/testing environment.
+The health endpoint should return:
 
-The current gateway implementation does not dynamically hand unauthenticated connections to Nginx. Nginx should therefore be treated as a separately configured web service until an explicitly tested integration is added.
+```
+ghost-nginx-ok
+```
+
+This Nginx deployment is independent of Ghost gateway authentication. The current gateway does not dynamically hand unauthenticated connections to Nginx.
+
+For the existing Nginx setup notes, see `docs/nginx-decoy-setup.md`.
 
 ## Documentation
 
 - `docs/socks5.md` — SOCKS5 protocol and implementation notes
 - `docs/traffic-padding.md` — traffic-padding implementation notes
 - `docs/nginx-decoy-setup.md` — Nginx deployment/testing notes
+- `deployments/nginx/README.md` — reproducible Nginx deployment
 - `tests/e2e-actual-config.ps1` — actual configuration E2E test
 - `configs/client.yaml` — client configuration reference
 - `configs/server.yaml` — server configuration
 
 ## Project verification status
-
-The current main branch includes the completed actual-config E2E integration.
 
 Recent verified work includes:
 
@@ -267,6 +163,8 @@ Recent verified work includes:
 - `go build ./...`
 - `go vet ./...`
 
+The Nginx deployment is separately documented and can be verified using its health endpoint.
+
 ## Development workflow
 
 Use feature branches for changes:
@@ -274,7 +172,6 @@ Use feature branches for changes:
 ```powershell
 git checkout main
 git pull origin main
-
 git checkout -b <type>/<short-description>
 ```
 
@@ -284,14 +181,13 @@ After implementation:
 go test ./...
 go build ./...
 go vet ./...
-
 git status --short --branch
 git add .
 git commit -m "type: describe the change"
 git push -u origin <type>/<short-description>
 ```
 
-Open a pull request against `main). Record the PR, tests, owner, and verification result in the project management board.
+Open a pull request against `main` and record the PR, tests, owner, and verification result in the project management board.
 
 ## Security notes
 
