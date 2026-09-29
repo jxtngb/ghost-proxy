@@ -7,31 +7,50 @@ $container = "ghost-proxy-nginx-health-test"
 $image = "ghost-proxy-nginx-health"
 
 function Cleanup {
-    docker rm -f $container 2>$null | Out-Null; $global:LASTEXITCODE = 0
-    docker image rm $image 2>$null | Out-Null; $global:LASTEXITCODE = 0
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+
+    docker rm -f $container 2>$null | Out-Null
+    docker image rm $image 2>$null | Out-Null
+
+    $ErrorActionPreference = $previousPreference
 }
 
 try {
     Write-Host "Checking Docker..."
     docker info | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Docker daemon is not available."
+    }
 
     Write-Host "Building Nginx image..."
     docker build -t $image .\deployments\nginx
+    if ($LASTEXITCODE -ne 0) {
+        throw "Nginx Docker image build failed."
+    }
 
-    docker rm -f $container 2>$null | Out-Null; $global:LASTEXITCODE = 0
+    $ErrorActionPreference = "Continue"
+    docker rm -f $container 2>$null | Out-Null
+    $ErrorActionPreference = "Stop"
 
     Write-Host "Starting Nginx..."
     docker run -d --name $container -p 18080:8080 $image | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Nginx container failed to start."
+    }
 
     Write-Host "Waiting for Nginx..."
     $health = $null
+
     for ($i = 0; $i -lt 20; $i++) {
         try {
             $health = Invoke-WebRequest -Uri "http://127.0.0.1:18080/health" -UseBasicParsing -TimeoutSec 2
+
             if ($health.StatusCode -eq 200) {
                 break
             }
-        } catch {
+        }
+        catch {
             Start-Sleep -Seconds 1
         }
     }
@@ -71,4 +90,3 @@ catch {
 finally {
     Cleanup
 }
-
