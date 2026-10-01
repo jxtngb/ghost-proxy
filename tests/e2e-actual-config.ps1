@@ -104,7 +104,9 @@ function Invoke-Socks5Request([string]$TargetHost, [int]$TargetPort, [string]$Re
     try {
         $tcp.Connect("127.0.0.1", 1080)
         $stream = $tcp.GetStream()
-        $stream.ReadTimeout = 5000
+        # A failed client-first auth read can wait for the client-side auth
+        # deadline before SOCKS receives its failure reply.
+        $stream.ReadTimeout = 15000
         $stream.WriteTimeout = 5000
         $stream.Write([byte[]](0x05, 0x01, 0x00), 0, 3)
         $method = Read-Exact $stream 2
