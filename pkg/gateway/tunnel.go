@@ -257,6 +257,21 @@ func writeDataFrame(
 	nonceCounter *frame.NonceCounter,
 	payload []byte,
 ) error {
+	// A data payload must fit inside the largest configured padding block.
+	// Maximum payload = 1460 - AEAD overhead - 2-byte envelope length prefix.
+	maxPayload := padding.BlockSizes[len(padding.BlockSizes)-1] - aead.Overhead() - 2
+	if maxPayload <= 0 {
+		return fmt.Errorf("gateway: invalid maximum data payload size: %d", maxPayload)
+	}
+
+	// Fragment large destination reads into protocol-sized data frames.
+	for len(payload) > maxPayload {
+		if err := writeDataFrame(w, aead, nonceCounter, payload[:maxPayload]); err != nil {
+			return err
+		}
+		payload = payload[maxPayload:]
+	}
+
 	envelope, err := frame.EncodePayload(payload)
 	if err != nil {
 		return fmt.Errorf(

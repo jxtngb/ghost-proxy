@@ -1,8 +1,10 @@
 package transport
 
 import (
+	"crypto/x509"
 	"fmt"
 	"net"
+	"os"
 
 	utls "github.com/refraction-networking/utls"
 )
@@ -31,11 +33,32 @@ func TLSConfig(serverName string) *utls.Config {
 		},
 	}
 }
+func TLSConfigWithRootCA(serverName, certFile string) (*utls.Config, error) {
+	config := TLSConfig(serverName)
+
+	certPEM, err := os.ReadFile(certFile)
+	if err != nil {
+		return nil, fmt.Errorf("ghost-proxy: read CA certificate: %w", err)
+	}
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(certPEM) {
+		return nil, fmt.Errorf("ghost-proxy: parse CA certificate")
+	}
+
+	config.RootCAs = pool
+	return config, nil
+}
 
 // DialUTLS establishes a TLS 1.3 connection using a controlled
 // Chrome-style ClientHello profile.
 func DialUTLS(rawConn net.Conn, serverName string) (*utls.UConn, error) {
 	return dialUTLS(rawConn, TLSConfig(serverName))
+}
+
+// DialUTLSWithConfig establishes a TLS 1.3 connection using the supplied configuration.
+func DialUTLSWithConfig(rawConn net.Conn, config *utls.Config) (*utls.UConn, error) {
+	return dialUTLS(rawConn, config)
 }
 
 // dialUTLS performs the uTLS connection setup using the supplied
