@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
 
 	utls "github.com/refraction-networking/utls"
 )
@@ -21,7 +22,7 @@ func TLSConfig(serverName string) *utls.Config {
 		MinVersion:    utls.VersionTLS13,
 		MaxVersion:    utls.VersionTLS13,
 		Renegotiation: utls.RenegotiateNever,
-		NextProtos:    []string{"h2", "http/1.1"},
+		NextProtos:    []string{"http/1.1"},
 		VerifyConnection: func(state utls.ConnectionState) error {
 			if state.Version != utls.VersionTLS13 {
 				return fmt.Errorf(
@@ -35,6 +36,9 @@ func TLSConfig(serverName string) *utls.Config {
 }
 func TLSConfigWithRootCA(serverName, certFile string) (*utls.Config, error) {
 	config := TLSConfig(serverName)
+	if certFile == "" {
+		return config, nil
+	}
 
 	certPEM, err := os.ReadFile(certFile)
 	if err != nil {
@@ -105,6 +109,7 @@ func dialUTLS(
 		)
 	}
 
+	_ = rawConn.SetDeadline(time.Now().Add(10 * time.Second))
 	if err := conn.Handshake(); err != nil {
 		rawConn.Close()
 		return nil, fmt.Errorf(
@@ -112,6 +117,7 @@ func dialUTLS(
 			err,
 		)
 	}
+	_ = conn.SetDeadline(time.Time{})
 
 	state := conn.ConnectionState()
 

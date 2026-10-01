@@ -10,13 +10,24 @@ func relay(clientConn, targetConn net.Conn) error {
 
 	go func() {
 		_, err := io.Copy(targetConn, clientConn)
+		if c, ok := targetConn.(*net.TCPConn); ok {
+			_ = c.CloseWrite()
+		}
 		errCh <- err
 	}()
 
 	go func() {
 		_, err := io.Copy(clientConn, targetConn)
+		if c, ok := clientConn.(*net.TCPConn); ok {
+			_ = c.CloseWrite()
+		}
 		errCh <- err
 	}()
 
-	return <-errCh
+	first := <-errCh
+	second := <-errCh
+	if first != nil {
+		return first
+	}
+	return second
 }

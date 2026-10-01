@@ -1,9 +1,7 @@
 # Nginx Deployment
 
-This directory contains the separately configured Nginx web service used for
-controlled Ghost Proxy deployment/testing.
-
-It is not dynamically connected to the Ghost gateway authentication path.
+This directory contains the Nginx decoy used by the Compose harness and
+gateway `fallback_address` after failed authentication.
 
 ## Docker
 
