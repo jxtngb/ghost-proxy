@@ -34,12 +34,12 @@ func (d *DataChannel) WriteConnectFrame(w io.Writer, target string) error {
 		return fmt.Errorf("transport: encode target: %w", err)
 	}
 
-	padded, err := padding.Pad(
-		envelope,
-		d.AEAD.Overhead(),
-	)
-	if err != nil {
-		return fmt.Errorf("transport: pad target: %w", err)
+	padded := envelope
+	if d.PaddingEnabled {
+		padded, err = padding.Pad(envelope, d.AEAD.Overhead())
+		if err != nil {
+			return fmt.Errorf("transport: pad target: %w", err)
+		}
 	}
 
 	nonce := d.SendNonces.Next()
@@ -47,7 +47,7 @@ func (d *DataChannel) WriteConnectFrame(w io.Writer, target string) error {
 	ciphertext, err := d.AEAD.Seal(
 		nonce[:],
 		padded,
-		[]byte{frame.TypeConnOpen},
+		d.aad(frame.TypeConnOpen, d.sendDirection, nonce),
 	)
 	if err != nil {
 		return fmt.Errorf("transport: seal target: %w", err)
@@ -58,6 +58,7 @@ func (d *DataChannel) WriteConnectFrame(w io.Writer, target string) error {
 		Nonce:      nonce,
 		Ciphertext: ciphertext,
 	}
+	d.delay()
 
 	if err := frame.WriteFrame(w, out); err != nil {
 		return fmt.Errorf("transport: write connect frame: %w", err)
@@ -87,11 +88,14 @@ func (d *DataChannel) ReadConnectFrame(r io.Reader) (string, error) {
 			in.Type,
 		)
 	}
+	if err := d.checkSequence(in.Nonce); err != nil {
+		return "", err
+	}
 
-	opened, err := d.AEAD.Open(
+	opened, err := d.ReceiveAEAD.Open(
 		in.Nonce[:],
 		in.Ciphertext,
-		[]byte{in.Type},
+		d.aad(in.Type, d.receiveDirection, in.Nonce),
 	)
 	if err != nil {
 		return "", fmt.Errorf(

@@ -21,7 +21,7 @@ import (
 	"io"
 )
 
-// Frame types, per the wire format specification.
+// Frame types. TypeConnOpen and TypeAuthSuccess are extensions to the original synopsis.
 const (
 	TypeAuthChallenge byte = 0x01
 	TypeAuthResponse  byte = 0x02
@@ -82,14 +82,15 @@ func WriteFrame(w io.Writer, f *Frame) error {
 	binary.BigEndian.PutUint16(header[1:3], uint16(len(f.Ciphertext)))
 	copy(header[3:3+NonceSize], f.Nonce[:])
 
-	if _, err := w.Write(header); err != nil {
-		return fmt.Errorf("frame: write header: %w", err)
+	packet := make([]byte, HeaderSize+len(f.Ciphertext))
+	copy(packet, header)
+	copy(packet[HeaderSize:], f.Ciphertext)
+	n, err := w.Write(packet)
+	if err != nil {
+		return fmt.Errorf("frame: write frame: %w", err)
 	}
-
-	if len(f.Ciphertext) > 0 {
-		if _, err := w.Write(f.Ciphertext); err != nil {
-			return fmt.Errorf("frame: write ciphertext: %w", err)
-		}
+	if n != len(packet) {
+		return io.ErrShortWrite
 	}
 
 	return nil

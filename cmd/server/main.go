@@ -6,10 +6,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	utls "github.com/refraction-networking/utls"
 
@@ -20,25 +22,6 @@ import (
 )
 
 const minPSKLen = 16
-
-type tlsListener struct {
-	net.Listener
-	Config *utls.Config
-}
-
-func (l *tlsListener) Accept() (net.Conn, error) {
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		return nil, err
-	}
-
-	tlsConn, err := transport.TLSServer(conn, l.Config)
-	if err != nil {
-		return nil, err
-	}
-
-	return tlsConn, nil
-}
 
 func exportServerKeyingMaterial(conn net.Conn) ([]byte, error) {
 	tlsConn, ok := conn.(*utls.Conn)
@@ -68,6 +51,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	logger.SetLevel(cfg.LogLevel)
 	if *listen != "" {
 		cfg.ListenAddress = *listen
 	}
@@ -98,10 +82,7 @@ func run() error {
 		return err
 	}
 
-	ln := &tlsListener{
-		Listener: rawLn,
-		Config:   tlsConfig,
-	}
+	ln := rawLn
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -115,6 +96,16 @@ func run() error {
 	srv := &gateway.Server{
 		PSK:      []byte(psk),
 		Exporter: exportServerKeyingMaterial,
+		Prepare: func(raw net.Conn) (net.Conn, error) {
+			_ = raw.SetDeadline(time.Now().Add(10 * time.Second))
+			tlsConn, err := transport.TLSServer(raw, tlsConfig)
+			if err != nil {
+				return nil, err
+			}
+			_ = tlsConn.SetDeadline(time.Time{})
+			return tlsConn, nil
+		},
+		OnFallback: func(conn net.Conn, replay io.Reader) { proxyToNginx(conn, replay, cfg.FallbackAddress) },
 		OnAuthenticated: func(conn net.Conn, session *gateway.AuthSession) {
 			defer conn.Close()
 
@@ -125,7 +116,7 @@ func run() error {
 
 			logger.Info(targetInfo)
 
-			if err := gateway.ServeTunnel(conn, session); err != nil {
+			if err := gateway.ServeTunnelWithOptions(conn, session, gateway.TunnelOptions{AllowedDestinations: cfg.AllowedDestinations, PaddingEnabled: cfg.PaddingEnabled, JitterMS: cfg.JitterMS}); err != nil {
 				target := conn.RemoteAddr()
 				if target != nil {
 					logger.Warn(
@@ -144,4 +135,79 @@ func run() error {
 
 	logger.Info("gateway listening", "addr", ln.Addr().String())
 	return srv.Serve(ln)
+}
+
+func proxyToNginx(client net.Conn, replay io.Reader, addr string) {
+	if addr == "" {
+		_ = client.Close()
+		return
+	}
+	upstream, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	if err != nil {
+		_ = client.Close()
+		return
+	}
+	defer upstream.Close()
+	defer client.Close()
+	done := make(chan struct{}, 2)
+	go func() {
+		_, copyErr := relayCopy(upstream, replay, client, 5*time.Minute)
+		if copyErr != nil {
+			_ = client.Close()
+			_ = upstream.Close()
+		}
+		if c, ok := upstream.(*net.TCPConn); ok {
+			_ = c.CloseWrite()
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		_, copyErr := relayCopy(client, upstream, upstream, 5*time.Minute)
+		if copyErr != nil {
+			_ = client.Close()
+			_ = upstream.Close()
+		}
+		if c, ok := client.(*net.TCPConn); ok {
+			_ = c.CloseWrite()
+		}
+		done <- struct{}{}
+	}()
+	<-done
+	<-done
+}
+
+func relayCopy(dst net.Conn, src io.Reader, readConn net.Conn, idle time.Duration) (int64, error) {
+	buf := make([]byte, 32*1024)
+	var total int64
+	for {
+		_ = readConn.SetReadDeadline(time.Now().Add(idle))
+		n, rerr := src.Read(buf)
+		if n > 0 {
+			_ = dst.SetWriteDeadline(time.Now().Add(idle))
+			if werr := writeFallbackAll(dst, buf[:n]); werr != nil {
+				return total, werr
+			}
+			total += int64(n)
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				return total, nil
+			}
+			return total, rerr
+		}
+	}
+}
+
+func writeFallbackAll(dst net.Conn, data []byte) error {
+	for len(data) > 0 {
+		n, err := dst.Write(data)
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
+	}
+	return nil
 }

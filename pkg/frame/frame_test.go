@@ -5,6 +5,23 @@ import (
 	"testing"
 )
 
+type countingWriter struct {
+	calls int
+	bytes.Buffer
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) { w.calls++; return w.Buffer.Write(p) }
+
+func TestWriteFrameUsesSingleWrite(t *testing.T) {
+	w := &countingWriter{}
+	if err := WriteFrame(w, &Frame{Type: TypeDataPayload, Ciphertext: []byte{1, 2, 3}}); err != nil {
+		t.Fatal(err)
+	}
+	if w.calls != 1 {
+		t.Fatalf("WriteFrame made %d writes, want 1", w.calls)
+	}
+}
+
 func TestWriteReadFrameRoundTrip(t *testing.T) {
 	nc, err := NewNonceCounter()
 	if err != nil {

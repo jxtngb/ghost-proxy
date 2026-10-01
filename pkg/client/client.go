@@ -11,12 +11,19 @@ import (
 	"github.com/jxtngb/ghost-proxy/pkg/crypto"
 	"github.com/jxtngb/ghost-proxy/pkg/frame"
 	"github.com/jxtngb/ghost-proxy/pkg/transport"
+	utls "github.com/refraction-networking/utls"
 )
 
 type Client struct {
-	ServerAddress string
-	ServerName    string
-	PSK           []byte
+	ServerAddress  string
+	ServerName     string
+	CAFile         string
+	PaddingEnabled *bool
+	JitterMS       int
+	tlsConfigOnce  sync.Once
+	tlsConfig      *utls.Config
+	tlsConfigErr   error
+	PSK            []byte
 }
 
 func New(serverAddress, serverName string, psk []byte) *Client {
@@ -59,13 +66,13 @@ func (c *Client) Dial(address string) (net.Conn, error) {
 		return nil, fmt.Errorf("connect to Ghost server: %w", err)
 	}
 
-	tlsConfig, err := transport.TLSConfigWithRootCA(c.ServerName, "configs/server.crt")
-	if err != nil {
+	c.tlsConfigOnce.Do(func() { c.tlsConfig, c.tlsConfigErr = transport.TLSConfigWithRootCA(c.ServerName, c.CAFile) })
+	if c.tlsConfigErr != nil {
 		raw.Close()
-		return nil, err
+		return nil, c.tlsConfigErr
 	}
 
-	tlsConn, err := transport.DialUTLSWithConfig(raw, tlsConfig)
+	tlsConn, err := transport.DialUTLSWithConfig(raw, c.tlsConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -76,22 +83,27 @@ func (c *Client) Dial(address string) (net.Conn, error) {
 		return nil, err
 	}
 
-	dataKey, authKey, err := crypto.DeriveSessionKeys(c.PSK, exporter)
+	c2sKey, s2cKey, authKey, err := crypto.DeriveDirectionalKeys(c.PSK, exporter)
 	if err != nil {
 		tlsConn.Close()
 		return nil, fmt.Errorf("derive session keys: %w", err)
 	}
 
-	if err := authenticate(tlsConn, dataKey, authKey); err != nil {
+	if err := authenticate(tlsConn, authKey); err != nil {
 		tlsConn.Close()
 		return nil, fmt.Errorf("authenticate: %w", err)
 	}
 
-	channel, err := transport.NewDataChannel(dataKey)
+	channel, err := transport.NewDirectionalDataChannel(c2sKey, s2cKey, 1, 2)
 	if err != nil {
 		tlsConn.Close()
 		return nil, err
 	}
+	paddingEnabled := true
+	if c.PaddingEnabled != nil {
+		paddingEnabled = *c.PaddingEnabled
+	}
+	channel.SetTrafficOptions(paddingEnabled, c.JitterMS)
 
 	if err := channel.WriteConnectFrame(tlsConn, address); err != nil {
 		tlsConn.Close()
@@ -105,58 +117,16 @@ func (c *Client) Dial(address string) (net.Conn, error) {
 	}, nil
 }
 
-func authenticate(conn net.Conn, dataKey, authKey []byte) error {
-	f, err := frame.ReadFrame(conn)
+func authenticate(conn net.Conn, authKey []byte) error {
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetDeadline(time.Time{})
+	proof, err := crypto.ClientProof(authKey)
 	if err != nil {
-		return fmt.Errorf("read authentication challenge: %w", err)
+		return err
 	}
-
-	if f.Type != frame.TypeAuthChallenge {
-		return fmt.Errorf("unexpected authentication frame: 0x%02x", f.Type)
-	}
-
-	if len(f.Ciphertext) != crypto.ChallengeSize {
-		return fmt.Errorf(
-			"invalid authentication challenge length: %d",
-			len(f.Ciphertext),
-		)
-	}
-
-	response, err := crypto.ComputeResponse(authKey, f.Ciphertext)
-	if err != nil {
-		return fmt.Errorf("compute authentication response: %w", err)
-	}
-
-	aead, err := crypto.NewAEAD(dataKey)
-	if err != nil {
-		return fmt.Errorf("create authentication AEAD: %w", err)
-	}
-
-	nonce, err := crypto.RandomNonce()
-	if err != nil {
-		return fmt.Errorf("generate authentication nonce: %w", err)
-	}
-
-	ciphertext, err := aead.Seal(
-		nonce,
-		response,
-		[]byte{frame.TypeAuthResponse},
-	)
-	if err != nil {
-		return fmt.Errorf("encrypt authentication response: %w", err)
-	}
-
-	var nonceArray [frame.NonceSize]byte
-	copy(nonceArray[:], nonce)
-
-	if err := frame.WriteFrame(conn, &frame.Frame{
-		Type:       frame.TypeAuthResponse,
-		Nonce:      nonceArray,
-		Ciphertext: ciphertext,
-	}); err != nil {
+	if err := frame.WriteFrame(conn, &frame.Frame{Type: frame.TypeAuthResponse, Ciphertext: proof}); err != nil {
 		return fmt.Errorf("write authentication response: %w", err)
 	}
-
 	ack, err := frame.ReadFrame(conn)
 	if err != nil {
 		return fmt.Errorf("read authentication result: %w", err)
@@ -164,7 +134,6 @@ func authenticate(conn net.Conn, dataKey, authKey []byte) error {
 	if ack.Type != frame.TypeAuthSuccess {
 		return fmt.Errorf("authentication rejected")
 	}
-
 	return nil
 }
 

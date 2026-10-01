@@ -1,8 +1,11 @@
 package transport
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
+	"math/rand"
+	"time"
 
 	"github.com/jxtngb/ghost-proxy/pkg/crypto"
 	"github.com/jxtngb/ghost-proxy/pkg/frame"
@@ -12,8 +15,14 @@ import (
 // DataChannel provides the Ghost Proxy data-frame
 // encode/pad/encrypt/decrypt/unpad/decode pipeline.
 type DataChannel struct {
-	AEAD       *crypto.AEAD
-	SendNonces *frame.NonceCounter
+	AEAD                            *crypto.AEAD
+	ReceiveAEAD                     *crypto.AEAD
+	SendNonces                      *frame.NonceCounter
+	sendDirection, receiveDirection byte
+	receiveSequence                 uint64
+	directional                     bool
+	PaddingEnabled                  bool
+	JitterMS                        int
 }
 
 // NewDataChannel creates a data channel from a session key.
@@ -29,9 +38,62 @@ func NewDataChannel(key []byte) (*DataChannel, error) {
 	}
 
 	return &DataChannel{
-		AEAD:       aead,
-		SendNonces: nonces,
+		AEAD:           aead,
+		ReceiveAEAD:    aead,
+		SendNonces:     nonces,
+		PaddingEnabled: true,
 	}, nil
+}
+
+func (d *DataChannel) SetTrafficOptions(paddingEnabled bool, jitterMS int) {
+	if d != nil {
+		d.PaddingEnabled = paddingEnabled
+		if jitterMS > 0 {
+			d.JitterMS = jitterMS
+		}
+	}
+}
+func (d *DataChannel) delay() {
+	if d.JitterMS > 0 {
+		time.Sleep(time.Duration(rand.Intn(d.JitterMS+1)) * time.Millisecond)
+	}
+}
+
+func NewDirectionalDataChannel(sendKey, receiveKey []byte, sendDirection, receiveDirection byte) (*DataChannel, error) {
+	d, err := NewDataChannel(sendKey)
+	if err != nil {
+		return nil, err
+	}
+	r, err := crypto.NewAEAD(receiveKey)
+	if err != nil {
+		return nil, err
+	}
+	d.ReceiveAEAD = r
+	d.sendDirection = sendDirection
+	d.receiveDirection = receiveDirection
+	d.directional = true
+	return d, nil
+}
+func (d *DataChannel) aad(typ, direction byte, nonce [frame.NonceSize]byte) []byte {
+	if !d.directional {
+		return []byte{typ}
+	}
+	a := make([]byte, 10)
+	a[0] = typ
+	a[1] = direction
+	copy(a[2:], nonce[4:])
+	return a
+}
+func (d *DataChannel) checkSequence(nonce [frame.NonceSize]byte) error {
+	if !d.directional {
+		return nil
+	}
+	seq := binary.BigEndian.Uint64(nonce[4:])
+	if seq != d.receiveSequence {
+		return fmt.Errorf("transport: unexpected frame sequence %d, want %d", seq, d.receiveSequence)
+	}
+	d.receiveSequence++
+	return nil
 }
 
 // WriteDataFrame performs:
@@ -51,9 +113,12 @@ func (d *DataChannel) WriteDataFrame(w io.Writer, payload []byte) error {
 		return fmt.Errorf("transport: encode payload: %w", err)
 	}
 
-	padded, err := padding.Pad(envelope, d.AEAD.Overhead())
-	if err != nil {
-		return fmt.Errorf("transport: pad payload: %w", err)
+	padded := envelope
+	if d.PaddingEnabled {
+		padded, err = padding.Pad(envelope, d.AEAD.Overhead())
+		if err != nil {
+			return fmt.Errorf("transport: pad payload: %w", err)
+		}
 	}
 
 	nonce := d.SendNonces.Next()
@@ -61,7 +126,7 @@ func (d *DataChannel) WriteDataFrame(w io.Writer, payload []byte) error {
 	ciphertext, err := d.AEAD.Seal(
 		nonce[:],
 		padded,
-		[]byte{frame.TypeDataPayload},
+		d.aad(frame.TypeDataPayload, d.sendDirection, nonce),
 	)
 	if err != nil {
 		return fmt.Errorf("transport: seal data frame: %w", err)
@@ -72,6 +137,7 @@ func (d *DataChannel) WriteDataFrame(w io.Writer, payload []byte) error {
 		Nonce:      nonce,
 		Ciphertext: ciphertext,
 	}
+	d.delay()
 
 	if err := frame.WriteFrame(w, out); err != nil {
 		return fmt.Errorf("transport: write data frame: %w", err)
@@ -103,11 +169,14 @@ func (d *DataChannel) ReadDataFrame(r io.Reader) ([]byte, error) {
 			in.Type,
 		)
 	}
+	if err := d.checkSequence(in.Nonce); err != nil {
+		return nil, err
+	}
 
-	opened, err := d.AEAD.Open(
+	opened, err := d.ReceiveAEAD.Open(
 		in.Nonce[:],
 		in.Ciphertext,
-		[]byte{in.Type},
+		d.aad(in.Type, d.receiveDirection, in.Nonce),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("transport: open data frame: %w", err)
