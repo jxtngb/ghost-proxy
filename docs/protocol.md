@@ -8,7 +8,10 @@ until a client sends its first application frame, which permits decoy replay.
 ## Connection setup and authentication
 
 1. A TCP connection is accepted. Its TLS 1.3 handshake runs in its own
-   goroutine with a 10 second deadline. The server negotiates `http/1.1` only.
+   goroutine with a 10 second deadline. The client offers the `http/1.1` ALPN
+   protocol; the gateway also selects only `http/1.1` because it does not
+   implement HTTP/2. This intentionally differs from the synopsis's
+   `h2/http1.1` ALPN list.
 2. Both sides derive independent `c2s`, `s2c`, and `auth` keys with HKDF-SHA256.
    The TLS exporter is the HKDF salt and each key has its own versioned label.
 3. The client's first TLS application frame is `TypeAuthResponse (0x02)`. Its
@@ -20,10 +23,21 @@ until a client sends its first application frame, which permits decoy replay.
    application bytes and relays both directions to `fallback_address`.
    During TLS handshake failure it replays consumed TCP bytes to the fallback.
 
-This client-first exchange replaces the synopsis's server challenge. It makes
-the decoy lifecycle silent until a client speaks. `Authenticate` remains as a
-deprecated server-first compatibility helper for migration tests; production
-gateway handling calls `AuthenticateReplay`.
+This project retains client-first authentication instead of the synopsis's
+server challenge. It avoids sending a Ghost-specific challenge to ordinary
+HTTPS clients before deciding whether their first application bytes belong to
+the proxy or the HTTP decoy. The thesis specification should record this as an
+approved protocol change. `Authenticate` remains as a deprecated server-first
+compatibility helper for migration tests; production gateway handling calls
+`AuthenticateReplay`.
+
+The bundled fallback is plain HTTP. Raw HTTP sent to the TLS port can be
+replayed to it, and an HTTP/1.1 request sent after a successful TLS handshake
+can be relayed after authentication parsing fails. A malformed TLS handshake
+cannot be made transparent by replaying its bytes to an HTTP listener: the
+gateway may already have sent a TLS alert. Arbitrary TLS-probe camouflage
+therefore remains incomplete and needs a TLS-capable decoy/proxy design plus
+network capture evidence.
 
 ## Frame format
 
@@ -60,9 +74,11 @@ client.
 
 ## Fingerprint and capture status
 
-The client uses a uTLS Chrome-style ClientHello and the server offers only
-`http/1.1`. See `docs/fingerprint.md` for the outstanding packet-capture
-comparison. Source inspection is not wire-level JA3/JA4 evidence.
+The client uses a uTLS Chrome-style ClientHello and both ends use only
+`http/1.1` ALPN. The synopsis lists `h2/http1.1`; this project deliberately
+omits `h2` because it is not an HTTP/2 server. See `docs/fingerprint.md` for
+the outstanding packet-capture comparison. Source inspection is not
+wire-level JA3/JA4 evidence.
 
 Each SOCKS CONNECT currently creates its own TLS connection and authentication
 exchange. A multiplexed long-lived tunnel has not been implemented.

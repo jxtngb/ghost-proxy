@@ -139,12 +139,20 @@ ghost-nginx-ok
 
 The Compose harness wires the gateway's `fallback_address` to Nginx. A wrong-key TLS client is relayed to the decoy after the gateway replays the consumed application bytes.
 
+Raw HTTP probes are detected before the TLS handshake and relayed to the same
+HTTP fallback. The fallback does not transparently continue a malformed TLS
+handshake: an HTTP-only Nginx service cannot complete TLS, and the gateway may
+already have sent a TLS alert. The Compose E2E checks both raw HTTP and an
+unauthenticated HTTP request over a successful TLS handshake.
+
 For the existing Nginx setup notes, see `docs/nginx-decoy-setup.md`.
 
 ## Documentation
 
 - `docs/protocol.md` — current authentication and frame protocol
 - `docs/fingerprint.md` — TLS fingerprint capture status
+- `docs/thesis-deviations.md` — authentication, ALPN, and protocol decisions
+- `docs/performance.md` — opt-in pprof and microbenchmark guidance
 - `docs/socks5.md` — SOCKS5 protocol and implementation notes
 - `docs/traffic-padding.md` — traffic-padding implementation notes
 - `docs/nginx-decoy-setup.md` — Nginx deployment/testing notes
@@ -154,9 +162,29 @@ For the existing Nginx setup notes, see `docs/nginx-decoy-setup.md`.
 - `configs/client.yaml` — client configuration reference
 - `configs/server.yaml` — server configuration
 
+## Performance profiling
+
+The gateway's pprof server is disabled by default. To enable it, set
+`pprof_address: "127.0.0.1:6060"` in the server configuration. Configuration
+loading rejects non-loopback addresses so profiling endpoints are not
+exposed on the public listener. See `docs/performance.md` for profile and
+benchmark commands.
+
 ## Project verification status
 
-Checks run for this source update:
+The CI workflow runs formatting, `go vet`, `staticcheck`, build, and race
+enabled tests. The Compose E2E additionally covers proxy forwarding plus raw
+HTTP and unauthenticated HTTPS fallback when run in a Docker environment.
+
+The source changes passed the ordinary Go test suite, build, vet, and
+Staticcheck on the Windows development host. Race testing needs a C compiler
+with 64-bit support; the installed MinGW compiler does not provide it. The
+Compose end-to-end test needs a running Docker Linux engine, which was
+unavailable on that host. Wire-level Chrome fingerprint comparison and real
+network/deployment results remain evidence-gathering tasks; see `CHANGES.md`
+for the recorded commands and limitations.
+
+Baseline checks recorded before this branch included:
 
 - `go test ./... -count=1`
 - `go build ./...`

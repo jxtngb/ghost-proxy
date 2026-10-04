@@ -42,6 +42,32 @@ func TestDataChannelRoundTrip(t *testing.T) {
 	}
 }
 
+func BenchmarkDataChannelRoundTrip(b *testing.B) {
+	key := testDataKey()
+	sender, err := NewDataChannel(key)
+	if err != nil {
+		b.Fatal(err)
+	}
+	receiver, err := NewDataChannel(key)
+	if err != nil {
+		b.Fatal(err)
+	}
+	payload := bytes.Repeat([]byte("g"), 512)
+	var wire bytes.Buffer
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		wire.Reset()
+		if err := sender.WriteDataFrame(&wire, payload); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := receiver.ReadDataFrame(&wire); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestDirectionalDataChannelSequenceAndAAD(t *testing.T) {
 	c2s := bytes.Repeat([]byte{1}, 32)
 	s2c := bytes.Repeat([]byte{2}, 32)

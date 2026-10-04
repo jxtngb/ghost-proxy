@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -20,6 +22,7 @@ type Config struct {
 	PaddingEnabled      *bool    `yaml:"padding_enabled"`
 	JitterMS            int      `yaml:"jitter_ms"`
 	AllowRemoteBind     bool     `yaml:"allow_remote_bind"`
+	PprofAddress        string   `yaml:"pprof_address"`
 }
 
 func Load(path string) (Config, error) {
@@ -36,6 +39,27 @@ func Load(path string) (Config, error) {
 	if cfg.JitterMS < 0 || cfg.JitterMS > 5000 {
 		return Config{}, fmt.Errorf("parse config: jitter_ms must be between 0 and 5000")
 	}
+	if cfg.PprofAddress != "" {
+		if err := validatePprofAddress(cfg.PprofAddress); err != nil {
+			return Config{}, fmt.Errorf("parse config: %w", err)
+		}
+	}
 
 	return cfg, nil
+}
+
+func validatePprofAddress(address string) error {
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("pprof_address must be a loopback IP and port: %w", err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("pprof_address must use a loopback IP address")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("pprof_address port must be between 1 and 65535")
+	}
+	return nil
 }
