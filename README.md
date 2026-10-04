@@ -86,7 +86,7 @@ The PSK itself is never logged by the application.
 
 The gateway requires a certificate and private key. For local development, the E2E test uses `configs/server.crt` and `configs/server.key`.
 
-The certificate must be trusted by the client when normal TLS verification is used. Do not commit private production keys or certificates to a public repository.
+Generate a local test certificate with `sh tests/gen-certs.sh`. The Linux Compose and Windows PowerShell E2E flows need these files. The client loads system roots when `ca_file` is empty; production deployments can use a publicly trusted certificate. Do not commit private production keys or certificates.
 
 ## Build and regression
 
@@ -97,7 +97,9 @@ go vet ./...
 powershell -ExecutionPolicy Bypass -File .\tests\e2e-actual-config.ps1
 ```
 
-A successful E2E run ends with:
+On Linux, run the Compose E2E with `sh tests/e2e-linux.sh`.
+
+The Windows E2E prints this on success:
 
 ```
 ACTUAL-CONFIG E2E TEST: PASS
@@ -135,35 +137,35 @@ The health endpoint should return:
 ghost-nginx-ok
 ```
 
-This Nginx deployment is independent of Ghost gateway authentication. The current gateway does not dynamically hand unauthenticated connections to Nginx.
+The Compose harness wires the gateway's `fallback_address` to Nginx. A wrong-key TLS client is relayed to the decoy after the gateway replays the consumed application bytes.
 
 For the existing Nginx setup notes, see `docs/nginx-decoy-setup.md`.
 
 ## Documentation
 
+- `docs/protocol.md` — current authentication and frame protocol
+- `docs/fingerprint.md` — TLS fingerprint capture status
 - `docs/socks5.md` — SOCKS5 protocol and implementation notes
 - `docs/traffic-padding.md` — traffic-padding implementation notes
 - `docs/nginx-decoy-setup.md` — Nginx deployment/testing notes
 - `deployments/nginx/README.md` — reproducible Nginx deployment
 - `tests/e2e-actual-config.ps1` — actual configuration E2E test
+- `tests/e2e-linux.sh` — Linux Compose E2E test (Docker and public network required)
 - `configs/client.yaml` — client configuration reference
 - `configs/server.yaml` — server configuration
 
 ## Project verification status
 
-Recent verified work includes:
+Checks run for this source update:
 
-- PSK encoding consistency between client and server
-- Gateway destination forwarding
-- Authentication success acknowledgement
-- Actual configured client/server E2E flow
-- Matching-PSK success
-- Incorrect-PSK rejection
-- `go test ./...`
+- `go test ./... -count=1`
 - `go build ./...`
 - `go vet ./...`
+- One-second native fuzz runs for `ReadFrame`, `Unpad`, and `readRequest`
+- `docker compose -f deployments/compose.yml config --quiet`
 
-The Nginx deployment is separately documented and can be verified using its health endpoint.
+The Docker Compose E2E needs a Linux shell, Docker engine, and public network
+access; it was not run in the Windows source environment.
 
 ## Development workflow
 

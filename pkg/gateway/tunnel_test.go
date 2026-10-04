@@ -59,14 +59,15 @@ func TestServeTunnelForwardsTraffic(t *testing.T) {
 	tunnelDone := make(chan error, 1)
 
 	go func() {
-		tunnelDone <- ServeTunnel(
+		tunnelDone <- serveTunnel(
 			serverConn,
 			session,
+			func(target string) (net.Conn, error) { return net.DialTimeout("tcp", target, 2*time.Second) },
 		)
 	}()
 
-	clientChannel, err := transport.NewDataChannel(
-		session.DataKey(),
+	clientChannel, err := transport.NewDirectionalDataChannel(
+		session.ClientToServerKey(), session.ServerToClientKey(), 1, 2,
 	)
 	if err != nil {
 		t.Fatalf("NewDataChannel: %v", err)

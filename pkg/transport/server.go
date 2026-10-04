@@ -28,7 +28,7 @@ func TLSServerConfig(certFile, keyFile string) (*utls.Config, error) {
 		MinVersion:    utls.VersionTLS13,
 		MaxVersion:    utls.VersionTLS13,
 		Renegotiation: utls.RenegotiateNever,
-		NextProtos:    []string{"h2", "http/1.1"},
+		NextProtos:    []string{"http/1.1"},
 		VerifyConnection: func(state utls.ConnectionState) error {
 			if state.Version != utls.VersionTLS13 {
 				return fmt.Errorf(
@@ -56,7 +56,6 @@ func TLSServer(rawConn net.Conn, config *utls.Config) (*utls.Conn, error) {
 	conn := utls.Server(rawConn, config)
 
 	if err := conn.Handshake(); err != nil {
-		rawConn.Close()
 		return nil, fmt.Errorf(
 			"ghost-proxy: TLS server handshake: %w",
 			err,
@@ -66,7 +65,6 @@ func TLSServer(rawConn net.Conn, config *utls.Config) (*utls.Conn, error) {
 	state := conn.ConnectionState()
 
 	if state.Version != utls.VersionTLS13 {
-		conn.Close()
 		return nil, fmt.Errorf(
 			"ghost-proxy: negotiated %s instead of TLS 1.3",
 			utls.VersionName(state.Version),

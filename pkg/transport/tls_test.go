@@ -35,6 +35,9 @@ func TestTLSConfigEnforcesTLS13(t *testing.T) {
 			cfg.Renegotiation,
 		)
 	}
+	if len(cfg.NextProtos) != 1 || cfg.NextProtos[0] != "http/1.1" {
+		t.Fatalf("NextProtos = %v, want only http/1.1", cfg.NextProtos)
+	}
 }
 
 func TestTLS13UTLSHandshake(t *testing.T) {

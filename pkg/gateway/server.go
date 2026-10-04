@@ -1,15 +1,16 @@
 package gateway
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"net"
 	"time"
 
 	"github.com/jxtngb/ghost-proxy/pkg/logger"
 )
 
-// ExporterFunc returns the TLS exporter material for a connection.
-// Day 4 replaces the stub with real TLS exporter extraction.
+// ExporterFunc returns the TLS exporter material for the established connection.
 type ExporterFunc func(conn net.Conn) ([]byte, error)
 
 // Server accepts connections and authenticates each one.
@@ -18,6 +19,10 @@ type Server struct {
 	PSK []byte
 	// Exporter supplies per-connection TLS exporter material.
 	Exporter ExporterFunc
+	// Prepare performs connection setup (including TLS handshake) per accepted peer.
+	Prepare func(net.Conn) (net.Conn, error)
+	// OnFallback receives consumed input for replay to the decoy.
+	OnFallback func(net.Conn, io.Reader)
 	// OnAuthenticated takes ownership of conn after a successful
 	// handshake (tunnel handling will live here). If nil, conn is closed.
 	OnAuthenticated func(conn net.Conn, s *AuthSession)
@@ -41,6 +46,22 @@ func (srv *Server) Serve(ln net.Listener) error {
 }
 
 func (srv *Server) handle(conn net.Conn) {
+	var consumed captureBuffer
+	rawConn := &captureConn{Conn: conn, capture: &consumed}
+	conn = rawConn
+	if srv.Prepare != nil {
+		prepared, err := srv.Prepare(conn)
+		if err != nil {
+			if srv.OnFallback != nil {
+				srv.OnFallback(conn, io.MultiReader(bytes.NewReader(consumed.Bytes()), conn))
+			} else {
+				conn.Close()
+			}
+			return
+		}
+		rawConn.capture = io.Discard
+		conn = prepared
+	}
 	remote := conn.RemoteAddr().String()
 
 	exporter, err := srv.Exporter(conn)
@@ -57,10 +78,14 @@ func (srv *Server) handle(conn net.Conn) {
 		return
 	}
 
-	if err := session.Authenticate(conn); err != nil {
-		// Later (Day 7): hand this connection to the Nginx fallback.
-		logger.Warn("authentication failed", "remote", remote, "err", err)
-		conn.Close()
+	replay, authErr := session.AuthenticateReplay(conn)
+	if authErr != nil {
+		logger.Warn("authentication failed", "remote", remote, "err", authErr)
+		if srv.OnFallback != nil {
+			srv.OnFallback(conn, replay)
+		} else {
+			conn.Close()
+		}
 		return
 	}
 
@@ -70,4 +95,22 @@ func (srv *Server) handle(conn net.Conn) {
 		return
 	}
 	srv.OnAuthenticated(conn, session)
+}
+
+type captureBuffer struct{ b []byte }
+
+func (c *captureBuffer) Write(p []byte) (int, error) { c.b = append(c.b, p...); return len(p), nil }
+func (c *captureBuffer) Bytes() []byte               { return c.b }
+
+type captureConn struct {
+	net.Conn
+	capture io.Writer
+}
+
+func (c *captureConn) Read(p []byte) (int, error) {
+	n, e := c.Conn.Read(p)
+	if n > 0 {
+		_, _ = c.capture.Write(p[:n])
+	}
+	return n, e
 }

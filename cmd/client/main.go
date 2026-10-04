@@ -1,25 +1,52 @@
 package main
 
 import (
+	"flag"
 	"log"
+	"net"
+	"path/filepath"
 
 	"github.com/jxtngb/ghost-proxy/pkg/client"
+	"github.com/jxtngb/ghost-proxy/pkg/config"
+	"github.com/jxtngb/ghost-proxy/pkg/logger"
 	"github.com/jxtngb/ghost-proxy/pkg/socks5"
 )
 
 func main() {
-	log.Println("Ghost Protocol client starting...")
+	configPath := flag.String("config", "configs/client.yaml", "client config path")
+	flag.Parse()
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	configAbs, err := filepath.Abs(*configPath)
+	if err != nil {
+		log.Fatalf("resolve config path: %v", err)
+	}
+	if cfg.CAFile != "" && !filepath.IsAbs(cfg.CAFile) {
+		cfg.CAFile = filepath.Join(filepath.Dir(configAbs), cfg.CAFile)
+	}
+	logger.SetLevel(cfg.LogLevel)
+	if cfg.ListenAddress == "" {
+		cfg.ListenAddress = "127.0.0.1:1080"
+	}
+	if host, _, err := net.SplitHostPort(cfg.ListenAddress); err != nil || (!cfg.AllowRemoteBind && host != "127.0.0.1" && host != "::1" && host != "localhost") {
+		log.Fatalf("refusing non-loopback SOCKS bind %q", cfg.ListenAddress)
+	}
+	if cfg.ServerAddress == "" || cfg.ServerName == "" {
+		log.Fatal("server_address and server_name must be configured")
+	}
 
-	ghostClient, err := client.FromEnvironment(
-		"127.0.0.1:443",
-		"localhost",
-	)
+	ghostClient, err := client.FromEnvironment(cfg.ServerAddress, cfg.ServerName)
 	if err != nil {
 		log.Fatalf("create Ghost client: %v", err)
 	}
+	ghostClient.CAFile = cfg.CAFile
+	ghostClient.PaddingEnabled = cfg.PaddingEnabled
+	ghostClient.JitterMS = cfg.JitterMS
 
 	server := &socks5.Server{
-		Addr: "127.0.0.1:1080",
+		Addr: cfg.ListenAddress,
 		Dial: ghostClient.Dial,
 	}
 

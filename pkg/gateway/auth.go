@@ -14,6 +14,8 @@ import (
 // TLS integration itself is intentionally kept outside this package.
 type AuthSession struct {
 	dataKey []byte
+	c2sKey  []byte
+	s2cKey  []byte
 	authKey []byte
 }
 
@@ -24,18 +26,37 @@ func NewAuthSession(psk, exporterMaterial []byte) (*AuthSession, error) {
 		return nil, errors.New("gateway: PSK must not be empty")
 	}
 
-	dataKey, authKey, err := ghostcrypto.DeriveSessionKeys(psk, exporterMaterial)
+	c2s, s2c, authKey, err := ghostcrypto.DeriveDirectionalKeys(psk, exporterMaterial)
 	if err != nil {
 		return nil, fmt.Errorf("gateway: derive session keys: %w", err)
 	}
+	legacyDataKey, _, err := ghostcrypto.DeriveSessionKeys(psk, exporterMaterial)
+	if err != nil {
+		return nil, fmt.Errorf("gateway: derive compatibility key: %w", err)
+	}
 
 	return &AuthSession{
-		dataKey: dataKey,
+		dataKey: legacyDataKey, c2sKey: c2s, s2cKey: s2c,
 		authKey: authKey,
 	}, nil
 }
 
-// DataKey returns the session key used for data encryption.
+func (s *AuthSession) ClientToServerKey() []byte {
+	if s == nil {
+		return nil
+	}
+	return append([]byte(nil), s.c2sKey...)
+}
+func (s *AuthSession) ServerToClientKey() []byte {
+	if s == nil {
+		return nil
+	}
+	return append([]byte(nil), s.s2cKey...)
+}
+
+// DataKey returns the compatibility key used by the legacy test handshake.
+//
+// Deprecated: data tunnels use ClientToServerKey and ServerToClientKey.
 func (s *AuthSession) DataKey() []byte {
 	if s == nil {
 		return nil
