@@ -139,7 +139,7 @@ func validateTunnelTarget(target string) error {
 type tunnelChannel struct {
 	send, receive  *ghostcrypto.AEAD
 	nonces         *frame.NonceCounter
-	sent, received uint64
+	received       uint64
 	paddingEnabled bool
 	jitterMS       int
 }

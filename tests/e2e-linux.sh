@@ -17,4 +17,17 @@ until curl --silent --show-error --output /dev/null --max-time 15 \
   i=$((i+1)); [ "$i" -lt 30 ] || exit 1
   sleep 1
 done
+raw_http_decoy=$(curl --silent --show-error --fail --max-time 10 --noproxy '*' \
+  http://127.0.0.1:443/health)
+[ "$raw_http_decoy" = "ghost-nginx-ok" ] || {
+  echo "raw HTTP probe did not receive the Nginx decoy response" >&2
+  exit 1
+}
+tls_http_decoy=$(curl --silent --show-error --fail --insecure --max-time 10 --noproxy '*' \
+  https://127.0.0.1:443/health)
+[ "$tls_http_decoy" = "ghost-nginx-ok" ] || {
+  echo "unauthenticated HTTPS request did not receive the Nginx decoy response" >&2
+  exit 1
+}
 echo "Compose SOCKS-to-gateway E2E passed"
+echo "Raw HTTP and unauthenticated HTTPS decoy fallback passed"

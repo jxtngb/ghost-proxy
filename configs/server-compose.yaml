@@ -6,3 +6,4 @@ fallback_address: "nginx:8080"
 allowed_destinations: []
 padding_enabled: true
 jitter_ms: 0
+pprof_address: ""

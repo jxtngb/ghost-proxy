@@ -1,5 +1,36 @@
 # Ghost Proxy change summary
 
+## Synopsis gap closure (2026-10-04)
+
+- Added loopback-only, opt-in pprof for the gateway and configuration checks
+  preventing profiling endpoints from binding to public interfaces.
+- Added a repeatable in-memory data-frame benchmark and profiling guidance.
+- Added pinned Staticcheck to CI and suppression comments for tests that
+  intentionally exercise the legacy server-first authentication helper.
+- Added pre-TLS HTTP preface detection so raw HTTP probes reach the configured
+  HTTP decoy without first receiving a TLS alert. Extended the Linux Compose
+  E2E script to check raw HTTP and unauthenticated HTTPS fallback.
+- Added a Certbot deploy hook to restart systemd after certificate renewal.
+- Documented the production client-first authentication flow, HTTP/1.1-only
+  ALPN choice, and the limitation that malformed TLS cannot transparently
+  continue through a plain HTTP decoy.
+- Recorded a preliminary codec benchmark: 4.588 µs/op, 111.60 MB/s,
+  6,992 B/op, 13 allocs/op on Windows/amd64, Go 1.27.0, AMD Ryzen 7 7435HS.
+
+### Verification for this branch
+
+- `go test ./... -count=1` — passed.
+- `go vet ./...` — passed.
+- `go build ./...` — passed.
+- `go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...` — passed.
+- `go test ./pkg/transport -run '^$' -bench BenchmarkDataChannelRoundTrip -benchmem -count=1` — passed.
+- `go test ./... -race -cover` — not runnable on this Windows host: its MinGW
+  `cc1.exe` reports that 64-bit mode is not compiled in.
+- `tests/e2e-linux.sh` — not run: the Docker CLI is present but the Docker
+  Desktop Linux engine is unavailable; no Linux shell is installed.
+- Chrome/JA3/JA4 captures, malformed TLS decoy behavior, VPS deployment,
+  multi-network field tests, and the final release remain outstanding.
+
 ## Gateway authentication and fallback
 
 - Changed production authentication to client-first. The client sends an HMAC proof derived from the PSK and TLS exporter; the server waits for this frame before sending anything.

@@ -217,6 +217,7 @@ func TestAuthOverRealTLS_Success(t *testing.T) {
 			return
 		}
 
+		//lint:ignore SA1019 This test covers the deprecated server-first compatibility handshake.
 		authErr := session.Authenticate(tlsConn)
 		serverCh <- serverResult{exporter: exporter, authErr: authErr}
 	}()
@@ -304,6 +305,7 @@ func TestAuthOverRealTLS_WrongPSK_Fails(t *testing.T) {
 			errCh <- err
 			return
 		}
+		//lint:ignore SA1019 This test covers the deprecated server-first compatibility handshake.
 		errCh <- session.Authenticate(tlsConn)
 	}()
 

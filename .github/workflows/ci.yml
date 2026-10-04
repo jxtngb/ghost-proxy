@@ -35,6 +35,12 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: Staticcheck
+        uses: dominikh/staticcheck-action@v1.4.1
+        with:
+          version: "2026.2.1"
+          install-go: false
+
       - name: Build
         run: go build ./...
 
