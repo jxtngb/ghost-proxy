@@ -5,13 +5,15 @@
 Ghost Proxy includes a separately configured Nginx web service for controlled
 deployment and testing.
 
-The current Ghost gateway does **not** dynamically hand unauthenticated or
-invalid connections to Nginx. Failed Ghost authentication remains a rejected
-connection.
+The gateway relays a TLS client's application stream to the configured
+`fallback_address` after authentication fails. In Compose that address is
+`nginx:8080`; configure Nginx separately and keep the fallback private to the
+container network. This is HTTP after the gateway's TLS termination. Failed
+TLS handshakes replay their consumed TCP bytes to the configured upstream.
 
 For the containerized project setup, Nginx listens on:
 
-- Address: `127.0.0.1`
+- Compose service address: `nginx`
 - Container port: `8080`
 - Default Docker host port in the examples: `8080`
 
@@ -73,5 +75,6 @@ Adapt the paths and service-management commands to the host distribution.
 Keep Nginx independently configured from the Ghost gateway. Use a controlled
 web page and controlled test environment for project demonstrations.
 
-Do not describe this deployment as a completed Ghost authentication fallback:
-that integration is not implemented or tested.
+The source tests verify wrong-key byte replay and a decoy response. Run
+`tests/e2e-linux.sh` to exercise the Compose topology on Linux with Docker and
+network access.

@@ -1,9 +1,9 @@
 # Nginx Deployment
 
-This directory contains the separately configured Nginx web service used for
-controlled Ghost Proxy deployment/testing.
-
-It is not dynamically connected to the Ghost gateway authentication path.
+This directory contains the plain HTTP decoy used by the Compose harness and
+the gateway's `fallback_address` after failed authentication or raw HTTP
+probing. The gateway replays consumed application bytes to Nginx and relays
+traffic in both directions.
 
 ## Docker
 
@@ -46,5 +46,12 @@ Confirm:
 4. `GET /health` returns HTTP 200 and `ghost-nginx-ok`.
 5. The service is independently reachable from the test machine.
 
-This deployment does not implement automatic fallback from failed Ghost
-authentication to Nginx.
+In the supplied Compose setup, the gateway uses `nginx:8080`. For a direct
+deployment, set `fallback_address` to the private address of this listener,
+such as `127.0.0.1:8080`.
+
+Raw HTTP probes can be replayed to this listener. An HTTP/1.1 request sent
+after a successful TLS handshake can also be handed off after Ghost
+authentication parsing fails. This HTTP-only decoy cannot continue a failed
+HTTPS handshake as TLS; the gateway may already have sent a TLS alert. See
+`docs/protocol.md` for the current fallback limits.

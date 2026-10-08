@@ -3,58 +3,52 @@ package main
 import (
 	"flag"
 	"log"
+	"net"
+	"path/filepath"
 
 	"github.com/jxtngb/ghost-proxy/pkg/client"
 	"github.com/jxtngb/ghost-proxy/pkg/config"
+	"github.com/jxtngb/ghost-proxy/pkg/logger"
 	"github.com/jxtngb/ghost-proxy/pkg/socks5"
 )
 
 func main() {
-	configPath := flag.String("config", "configs/client.yaml", "path to client config")
+	configPath := flag.String("config", "configs/client.yaml", "client config path")
 	flag.Parse()
-
-	log.Println("Ghost Protocol client starting...")
-
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatalf("load client config: %v", err)
+		log.Fatal(err)
 	}
-
+	configAbs, err := filepath.Abs(*configPath)
+	if err != nil {
+		log.Fatalf("resolve config path: %v", err)
+	}
+	if cfg.CAFile != "" && !filepath.IsAbs(cfg.CAFile) {
+		cfg.CAFile = filepath.Join(filepath.Dir(configAbs), cfg.CAFile)
+	}
+	logger.SetLevel(cfg.LogLevel)
 	if cfg.ListenAddress == "" {
-		log.Fatal("client listen_address is required")
+		cfg.ListenAddress = "127.0.0.1:1080"
+	}
+	if host, _, err := net.SplitHostPort(cfg.ListenAddress); err != nil || (!cfg.AllowRemoteBind && host != "127.0.0.1" && host != "::1" && host != "localhost") {
+		log.Fatalf("refusing non-loopback SOCKS bind %q", cfg.ListenAddress)
+	}
+	if cfg.ServerAddress == "" || cfg.ServerName == "" {
+		log.Fatal("server_address and server_name must be configured")
 	}
 
-	if cfg.ServerAddress == "" {
-		log.Fatal("client server_address is required")
-	}
-
-	if cfg.ServerName == "" {
-		log.Fatal("client server_name is required")
-	}
-
-	ghostClient, err := client.FromEnvironment(
-		cfg.ServerAddress,
-		cfg.ServerName,
-	)
+	ghostClient, err := client.FromEnvironment(cfg.ServerAddress, cfg.ServerName)
 	if err != nil {
 		log.Fatalf("create Ghost client: %v", err)
 	}
-
 	ghostClient.CAFile = cfg.CAFile
-	paddingEnabled := cfg.PaddingEnabled
-	ghostClient.PaddingEnabled = &paddingEnabled
+	ghostClient.PaddingEnabled = cfg.PaddingEnabled
 	ghostClient.JitterMS = cfg.JitterMS
 
 	server := &socks5.Server{
 		Addr: cfg.ListenAddress,
 		Dial: ghostClient.Dial,
 	}
-
-	log.Printf(
-		"Ghost client listening on %s -> %s",
-		cfg.ListenAddress,
-		cfg.ServerAddress,
-	)
 
 	if err := server.Start(); err != nil {
 		log.Fatalf("SOCKS5 server stopped: %v", err)
