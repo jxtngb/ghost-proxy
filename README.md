@@ -4,7 +4,7 @@ Ghost Proxy is a Go-based SOCKS5 proxy system that establishes an authenticated 
 
 ## Current architecture
 
-```
+```text
 Application
     |
     v
@@ -16,14 +16,12 @@ Ghost client
     |
     | TLS 1.3 + authenticated Ghost protocol
     v
-Ghost gateway/server (default: 0.0.0.0:443)
+Ghost gateway/server
     |
     | authenticated destination forwarding
     v
 Controlled TCP destination
 ```
-
-The repository contains separate packages for configuration, logging, cryptography, framing, padding, transport, SOCKS5 handling, and gateway authentication/tunnelling.
 
 ## Implemented components
 
@@ -42,20 +40,16 @@ The repository contains separate packages for configuration, logging, cryptograp
 - Incorrect-PSK rejection test
 - Go unit/integration tests and CI
 
-Gateway destination forwarding is implemented and is part of the tested application path.
-
 ## Requirements
 
 - Go toolchain compatible with the version declared by `go.mod`
-- OpenSSL or another certificate-generation tool for local development
-- A TLS certificate and private key for the gateway
-- A shared hexadecimal PSK in the `GHOST_PSK` environment variable
+- OpenSSL for local certificate generation
+- TLS certificate and private key for the gateway
+- Shared hexadecimal PSK in `GHOST_PSK` (see PSK setup — obtained from the maintainer, not self-generated)
 
 ## Configuration
 
 ### Server
-
-The default server configuration is:
 
 ```yaml
 listen_address: "0.0.0.0:443"
@@ -64,50 +58,219 @@ cert_file: "configs/server.crt"
 key_file: "configs/server.key"
 ```
 
+For local development, `Start_server.SH` starts the server on `127.0.0.1:8443`.
+
 ### Client
+
+Default reference:
 
 ```yaml
 listen_address: "127.0.0.1:1080"
 server_address: "127.0.0.1:443"
+server_name: "localhost"
+ca_file: "server.crt"
 log_level: "info"
+fallback_address: ""
+padding_enabled: true
+jitter_ms: 0
+```
+
+For local launcher testing:
+
+```yaml
+listen_address: "127.0.0.1:1080"
+server_address: "127.0.0.1:8443"
+server_name: "localhost"
+ca_file: "server.crt"
+log_level: "info"
+fallback_address: ""
+padding_enabled: true
+jitter_ms: 0
 ```
 
 ## PSK setup
 
-The client and server must use the same hexadecimal PSK and it must decode to at least 16 bytes.
+Ghost Proxy uses **one shared PSK for the whole deployment** — the server and every client use the identical key. It is generated and rotated only by the project maintainer, not by individual users. If you need to connect, request the current PSK from the maintainer rather than generating your own — a self-generated key will not match the server and the handshake will fail.
 
-```powershell
-$env:GHOST_PSK = "00112233445566778899aabbccddeeff"
+The PSK must be hexadecimal and decode to at least 16 bytes (32 bytes / 64 hex characters recommended).
+
+Once you have the key, create a local `ghost.env` file:
+
+```text
+GHOST_PSK=<the key the maintainer gave you>
 ```
 
-The PSK itself is never logged by the application.
+Restrict its permissions:
+
+```bash
+chmod 600 ghost.env
+```
+
+Never commit `ghost.env`, production PSKs, private keys, or certificates.
+
+> **Maintainer only — generating or rotating the PSK:**
+> ```bash
+> openssl rand -hex 32
+> ```
+> After rotating, the new key must be redistributed to every client out of
+> band (not via git, not via this README) before the old key is retired.
+
+> **Design note:** a single shared PSK means any compromise affects every
+> client equally, and individual clients cannot be distinguished or revoked
+> separately. This is an intentional trade-off for a small, trusted,
+> centrally-maintained deployment — not a gap. Per-client PSKs or
+> certificate-based (mTLS) auth are possible future work if the deployment
+> grows beyond that scope.
 
 ## TLS certificate
 
-The gateway requires a certificate and private key. For local development, the E2E test uses `configs/server.crt` and `configs/server.key`.
+For local development, generate the test certificate with:
 
-The certificate must be trusted by the client when normal TLS verification is used. Do not commit private production keys or certificates to a public repository.
+```bash
+sh tests/gen-certs.sh
+```
+
+Or manually, including a Subject Alternative Name (required by modern TLS clients):
+
+```bash
+openssl req -x509 -newkey rsa:2048 \
+  -keyout configs/server.key -out configs/server.crt \
+  -days 365 -nodes \
+  -subj "/CN=localhost" \
+  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+```
+
+The certificate and key should be:
+
+```text
+configs/server.crt
+configs/server.key
+```
+
+With `ca_file: "server.crt"` in `configs/client.yaml`, the client resolves the CA relative to the configuration directory — do not prefix it with `configs/` or the client will look for a duplicated, nonexistent path.
+
+TLS certificate verification remains enabled.
+
+## Local quick start
+
+The repository includes launcher scripts for simplified local client/server testing.
+
+| File | Purpose |
+|---|---|
+| `Start_server.SH` | Starts `ghost-server` on `127.0.0.1:8443` |
+| `Start_client.SH` | Starts `ghost-client` |
+| `start-client.bat` | Starts `ghost-client` on Windows |
+
+### 1. Build
+
+From the repository root:
+
+```bash
+go build -o ghost-server ./cmd/server
+go build -o ghost-client ./cmd/client
+```
+
+### 2. Create `ghost.env`
+
+```text
+GHOST_PSK=<the key the maintainer gave you>
+```
+
+Keep it local — see PSK setup above.
+
+### 3. Configure the client
+
+Edit `configs/client.yaml`:
+
+```yaml
+listen_address: "127.0.0.1:1080"
+server_address: "127.0.0.1:8443"
+server_name: "localhost"
+ca_file: "server.crt"
+```
+
+### 4. Start the server
+
+Linux/macOS:
+
+```bash
+bash ./Start_server.SH
+```
+
+Windows:
+
+```powershell
+.\ghost-server.exe -listen 127.0.0.1:8443
+```
+
+### 5. Start the client
+
+Linux/macOS:
+
+```bash
+bash ./Start_client.SH
+```
+
+Windows:
+
+```bat
+start-client.bat
+```
+
+The SOCKS5 listener is available on `127.0.0.1:1080`.
+
+### 6. Test
+
+```bash
+curl --socks5-hostname 127.0.0.1:1080 https://example.com -I
+```
+
+A successful request should return an HTTP status such as:
+
+```text
+HTTP/2 200
+```
+
+### Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `syntax error near unexpected token 'newline'` loading `ghost.env` | Stray characters in the file — check with `cat -A ghost.env` |
+| `connect: connection refused` on port 443 | `client.yaml`'s `server_address` port doesn't match the port the server actually bound to (e.g. still `:443` instead of `:8443`) |
+| `read CA certificate: ... configs/configs/server.crt: no such file` | `ca_file` in `client.yaml` has a redundant `configs/` prefix — it should just be `server.crt` |
+| `load TLS certificate: ... no such file or directory` | Cert/key haven't been generated yet — see TLS certificate above |
 
 ## Build and regression
 
-```powershell
+```bash
 go test ./...
 go build ./...
 go vet ./...
+```
+
+Windows E2E:
+
+```powershell
 powershell -ExecutionPolicy Bypass -File .\tests\e2e-actual-config.ps1
 ```
 
-A successful E2E run ends with:
+Linux E2E:
 
+```bash
+sh tests/e2e-linux.sh
 ```
+
+A successful Windows E2E run ends with:
+
+```text
 ACTUAL-CONFIG E2E TEST: PASS
 ```
 
 ## Nginx deployment
 
-The repository includes a separately configured Nginx service for controlled deployment/testing:
+The repository includes a separately configured Nginx service for controlled deployment/testing.
 
-```
+```text
 deployments/nginx/
 ├── Dockerfile
 ├── nginx.conf
@@ -115,61 +278,81 @@ deployments/nginx/
 └── README.md
 ```
 
-Build and run it with Docker:
+Build and run:
 
-```powershell
-docker build -t ghost-proxy-nginx .\deployments\nginx
+```bash
+docker build -t ghost-proxy-nginx ./deployments/nginx
 docker run --rm -p 8080:8080 ghost-proxy-nginx
 ```
 
-Verify it:
+Verify:
 
-```powershell
-curl.exe http://127.0.0.1:8080/
-curl.exe http://127.0.0.1:8080/health
+```bash
+curl http://127.0.0.1:8080/
+curl http://127.0.0.1:8080/health
 ```
 
 The health endpoint should return:
 
-```
+```text
 ghost-nginx-ok
 ```
-
-This Nginx deployment is independent of Ghost gateway authentication. The current gateway does not dynamically hand unauthenticated connections to Nginx.
 
 For the existing Nginx setup notes, see `docs/nginx-decoy-setup.md`.
 
 ## Documentation
 
-- `docs/socks5.md` — SOCKS5 protocol and implementation notes
-- `docs/traffic-padding.md` — traffic-padding implementation notes
-- `docs/nginx-decoy-setup.md` — Nginx deployment/testing notes
-- `deployments/nginx/README.md` — reproducible Nginx deployment
-- `tests/e2e-actual-config.ps1` — actual configuration E2E test
-- `configs/client.yaml` — client configuration reference
+- `docs/protocol.md` — authentication and frame protocol
+- `docs/fingerprint.md` — TLS fingerprint capture status
+- `docs/thesis-deviations.md` — protocol decisions
+- `docs/performance.md` — pprof and benchmark guidance
+- `docs/socks5.md` — SOCKS5 implementation notes
+- `docs/traffic-padding.md` — traffic-padding notes
+- `docs/nginx-decoy-setup.md` — Nginx notes
+- `deployments/nginx/README.md` — Nginx deployment
+- `tests/e2e-actual-config.ps1` — actual configuration E2E
+- `tests/e2e-linux.sh` — Linux Compose E2E
+- `configs/client.yaml` — client configuration
 - `configs/server.yaml` — server configuration
+- `Start_server.SH` — local server launcher
+- `Start_client.SH` — local client launcher
+- `start-client.bat` — Windows client launcher
+
+## Performance profiling
+
+The gateway's pprof server is disabled by default.
+
+Enable it with:
+
+```yaml
+pprof_address: "127.0.0.1:6060"
+```
+
+Configuration rejects non-loopback profiling addresses.
+
+See `docs/performance.md`.
 
 ## Project verification status
 
-Recent verified work includes:
+CI runs formatting, `go vet`, `staticcheck`, build, and race-enabled tests.
 
-- PSK encoding consistency between client and server
-- Gateway destination forwarding
-- Authentication success acknowledgement
-- Actual configured client/server E2E flow
-- Matching-PSK success
-- Incorrect-PSK rejection
-- `go test ./...`
-- `go build ./...`
-- `go vet ./...`
+Baseline checks include:
 
-The Nginx deployment is separately documented and can be verified using its health endpoint.
+```text
+go test ./... -count=1
+go build ./...
+go vet ./...
+native fuzz smoke tests
+docker compose -f deployments/compose.yml config --quiet
+```
+
+See `CHANGES.md` for detailed verification results and known limitations.
 
 ## Development workflow
 
-Use feature branches for changes:
+Use feature branches:
 
-```powershell
+```bash
 git checkout main
 git pull origin main
 git checkout -b <type>/<short-description>
@@ -177,26 +360,27 @@ git checkout -b <type>/<short-description>
 
 After implementation:
 
-```powershell
+```bash
 go test ./...
 go build ./...
 go vet ./...
 git status --short --branch
-git add .
+git add <intended-files>
 git commit -m "type: describe the change"
 git push -u origin <type>/<short-description>
 ```
 
-Open a pull request against `main` and record the PR, tests, owner, and verification result in the project management board.
+Open a pull request against `main`.
 
 ## Security notes
 
 - Never commit production PSKs or private TLS keys.
-- Use a strong randomly generated PSK for real deployments.
+- Never commit `ghost.env`.
+- Only the maintainer generates or rotates the PSK; others request it rather than generating their own.
+- The deployment uses a single shared PSK across all clients by design — this is suitable for a small, trusted, centrally-maintained setup but does not provide per-client accountability or revocation.
 - Keep TLS certificate verification enabled.
-- Restrict gateway destination access according to the deployment's trust boundary.
-- Use controlled destinations when demonstrating or testing forwarding.
-- Review changes to cryptographic, authentication, and networking code before merging.
+- Restrict gateway destination access according to the deployment trust boundary.
+- Use controlled destinations for testing.
 
 ## License
 

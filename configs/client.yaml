@@ -1,7 +1,7 @@
 listen_address: "127.0.0.1:1080"
-server_address: "ghostproxy.duckdns.org:443"
-server_name: "ghostproxy.duckdns.org"
-ca_file: ""
+server_address: "127.0.0.1:443"
+server_name: "localhost"
+ca_file: "server.crt"
 log_level: "info"
 fallback_address: ""
 padding_enabled: true

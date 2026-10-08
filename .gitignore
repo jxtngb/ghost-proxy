@@ -3,3 +3,9 @@
 configs/server.crt
 configs/server.key
 ghost-server
+ghost-client
+*.exe
+.env
+
+# Local secret material (contains GHOST_PSK)
+ghost.env

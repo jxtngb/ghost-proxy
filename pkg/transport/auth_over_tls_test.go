@@ -1,6 +1,6 @@
 // Day 4 deliverable (Member B): validate authentication pass-through over
 // TLS. The existing pkg/gateway/integration_test.go tests
-// gateway.NewAuthSession end-to-end against crypto/frame — but every one of
+// gateway.NewAuthSession end-to-end against crypto/frame â€” but every one of
 // those tests runs over net.Pipe(), an in-memory, unencrypted connection.
 // Nothing in the existing suites proves the auth handshake survives being
 // carried over an actual TLS 1.3 connection using the real Chrome-spoofed
@@ -9,9 +9,9 @@
 // Deliberately package transport (white-box), not transport_test: the
 // exported DialUTLS always builds its own TLS config internally and offers
 // no way to inject a trusted cert pool for a self-signed test certificate.
-// The unexported dialUTLS does accept a custom *utls.Config — its own doc
+// The unexported dialUTLS does accept a custom *utls.Config â€” its own doc
 // comment says this exists so tests can supply a trusted pool without
-// disabling verification — so this test has to live in-package to reach it.
+// disabling verification â€” so this test has to live in-package to reach it.
 package transport
 
 import (
@@ -23,6 +23,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -167,7 +168,7 @@ func clientAuthHandshake(conn net.Conn, psk, exporter []byte, tamper func(f *fra
 // TCP listener, a real spoofed-Chrome TLS 1.3 handshake (client and server
 // sides of pkg/transport), TLS exporter material pulled from that live
 // session on both ends, and gateway.NewAuthSession's challenge/response
-// running over the resulting *utls connection* — not net.Pipe().
+// running over the resulting *utls connection* â€” not net.Pipe().
 func TestAuthOverRealTLS_Success(t *testing.T) {
 	certFile, keyFile, certPEM := generateSelfSignedCert(t)
 	psk := []byte("shared-psk-for-tls-integration-test")
@@ -216,6 +217,7 @@ func TestAuthOverRealTLS_Success(t *testing.T) {
 			return
 		}
 
+		//lint:ignore SA1019 This test covers the deprecated server-first compatibility handshake.
 		authErr := session.Authenticate(tlsConn)
 		serverCh <- serverResult{exporter: exporter, authErr: authErr}
 	}()
@@ -303,6 +305,7 @@ func TestAuthOverRealTLS_WrongPSK_Fails(t *testing.T) {
 			errCh <- err
 			return
 		}
+		//lint:ignore SA1019 This test covers the deprecated server-first compatibility handshake.
 		errCh <- session.Authenticate(tlsConn)
 	}()
 
@@ -327,5 +330,82 @@ func TestAuthOverRealTLS_WrongPSK_Fails(t *testing.T) {
 	authErr := <-errCh
 	if !errors.Is(authErr, gateway.ErrAuthFailed) {
 		t.Errorf("expected gateway.ErrAuthFailed for mismatched PSK over real TLS, got: %v", authErr)
+	}
+}
+
+func TestClientFirstWrongPSKReceivesDecoyOverTLS(t *testing.T) {
+	certFile, keyFile, certPEM := generateSelfSignedCert(t)
+	serverCfg, err := TLSServerConfig(certFile, keyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	serverPSK := []byte("right-key-for-real-tls-fallback")
+	replayed := make(chan []byte, 1)
+	srv := &gateway.Server{PSK: serverPSK, Prepare: func(c net.Conn) (net.Conn, error) {
+		_ = c.SetDeadline(time.Now().Add(5 * time.Second))
+		tlsConn, e := TLSServer(c, serverCfg)
+		if e == nil {
+			_ = tlsConn.SetDeadline(time.Time{})
+		}
+		return tlsConn, e
+	}, Exporter: func(c net.Conn) ([]byte, error) {
+		tlsConn, ok := c.(*utls.Conn)
+		if !ok {
+			return nil, errors.New("not a uTLS server connection")
+		}
+		return ExportServerKeyingMaterial(tlsConn)
+	}, OnFallback: func(c net.Conn, r io.Reader) {
+		b := make([]byte, frame.HeaderSize+32)
+		_, _ = io.ReadFull(r, b)
+		replayed <- b
+		_, _ = io.WriteString(c, "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nDecoy page")
+		_ = c.Close()
+	}}
+	go srv.Serve(ln)
+	raw, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTLS := dialClientForTest(t, raw, certPEM)
+	defer clientTLS.Close()
+	exporter, err := ExportKeyingMaterial(clientTLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, authKey, err := crypto.DeriveSessionKeys([]byte("wrong-key-for-real-tls-fallback"), exporter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof, err := crypto.ClientProof(authKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent bytes.Buffer
+	if err := frame.WriteFrame(&sent, &frame.Frame{Type: frame.TypeAuthResponse, Ciphertext: proof}); err != nil {
+		t.Fatal(err)
+	}
+	_ = clientTLS.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := clientTLS.Write(sent.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	response, err := io.ReadAll(clientTLS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(response, []byte("Decoy page")) {
+		t.Fatalf("decoy page missing: %q", response)
+	}
+	select {
+	case got := <-replayed:
+		if !bytes.Equal(got, sent.Bytes()) {
+			t.Fatalf("fallback replay differs: %x != %x", got, sent.Bytes())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("fallback did not receive consumed auth frame")
 	}
 }

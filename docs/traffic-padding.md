@@ -25,11 +25,13 @@ These values are defined by `pkg/padding.BlockSizes`.
 
 The smallest configured block that can contain the plaintext envelope plus AEAD overhead is selected automatically.
 
-Traffic padding is currently code-configured rather than YAML-configured. The existing configuration does not expose a padding setting. If different padding profiles are required in the future, the supported block sizes can be changed in `pkg/padding/padding.go`.
+Padding can be enabled or disabled with `padding_enabled` and write jitter can
+be set with `jitter_ms` in YAML. The supported block sizes remain defined in
+`pkg/padding/padding.go`.
 
 ## Frame Size and Capacity
 
-The protected transport uses ChaCha20-Poly1305 with a 16-byte AEAD authentication tag.
+The protected transport uses ChaCha20-Poly1305 with a 16-byte AEAD authentication tag. A 1460-byte ciphertext plus the 15-byte frame header and 22-byte TLS 1.3 record overhead is 1497 bytes before IP/TCP headers, so that block exceeds a 1500-byte path MTU and TCP splits it across segments. No packet capture was available to verify actual segmentation on a particular network.
 
 | Wire block | AEAD overhead | Envelope capacity | Maximum payload |
 | ---------- | ------------- | ----------------- | --------------- |

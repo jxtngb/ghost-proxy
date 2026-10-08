@@ -1,11 +1,16 @@
 package socks5
 
 import (
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"time"
+
+	"github.com/jxtngb/ghost-proxy/pkg/logger"
 )
+
+const requestTimeout = 15 * time.Second
 
 const (
 	socks5Version    = 0x05
@@ -30,7 +35,7 @@ func (s *Server) Start() error {
 	}
 	defer listener.Close()
 
-	fmt.Printf("SOCKS5 server listening on %s\n", s.Addr)
+	logger.Info("SOCKS5 server listening", "addr", s.Addr)
 
 	dial := s.Dial
 	if dial == nil {
@@ -42,20 +47,29 @@ func (s *Server) Start() error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			return fmt.Errorf("accept connection: %w", err)
+			if errors.Is(err, net.ErrClosed) {
+				return nil
+			}
+			logger.Warn("SOCKS5 accept failed", "err", err)
+			time.Sleep(50 * time.Millisecond)
+			continue
 		}
 
 		go func(conn net.Conn) {
 			defer conn.Close()
 
 			if err := handleConnection(conn, dial); err != nil {
-				fmt.Printf("SOCKS5 connection failed: %v\n", err)
+				logger.Warn("SOCKS5 connection failed", "err", err)
 			}
 		}(conn)
 	}
 }
 
 func handleConnection(conn net.Conn, dial DialFunc) error {
+	if err := conn.SetDeadline(time.Now().Add(requestTimeout)); err != nil {
+		return err
+	}
+	defer conn.SetDeadline(time.Time{})
 	if err := handleGreeting(conn); err != nil {
 		return fmt.Errorf("greeting: %w", err)
 	}
@@ -63,6 +77,9 @@ func handleConnection(conn net.Conn, dial DialFunc) error {
 	request, err := readRequest(conn)
 	if err != nil {
 		return fmt.Errorf("request: %w", err)
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		return err
 	}
 
 	targetConn, err := connectToTarget(request, dial)
@@ -121,8 +138,6 @@ func handleGreeting(conn net.Conn) error {
 	if _, err := io.ReadFull(conn, methods); err != nil {
 		return fmt.Errorf("read authentication methods: %w", err)
 	}
-
-	fmt.Printf("SOCKS5 methods: %s\n", hex.EncodeToString(methods))
 
 	for _, method := range methods {
 		if method == noAuthentication {

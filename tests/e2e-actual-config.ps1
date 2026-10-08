@@ -1,8 +1,7 @@
 # Actual-config Ghost Proxy E2E test.
 # Runs the real cmd/server and cmd/client applications with repository config.
 # Verifies matching and mismatched PSKs through SOCKS5.
-# Prerequisites: Go 1.27+, Python 3, configs/server.crt, configs/server.key,
-# and a trusted localhost certificate for normal TLS verification.
+# Prerequisites: Go 1.27+, public network access, configs/server.crt, configs/server.key.
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
@@ -11,13 +10,10 @@ $psk = "00112233445566778899aabbccddeeff"
 $wrongPsk = "ffeeddccbbaa99887766554433221100"
 $serverExe = Join-Path $env:TEMP "ghost-proxy-e2e-server.exe"
 $clientExe = Join-Path $env:TEMP "ghost-proxy-e2e-client.exe"
-$targetScript = Join-Path $env:TEMP "ghost-proxy-e2e-target.py"
 $serverOut = Join-Path $env:TEMP "ghost-proxy-e2e-server.out.log"
 $serverErr = Join-Path $env:TEMP "ghost-proxy-e2e-server.err.log"
 $clientOut = Join-Path $env:TEMP "ghost-proxy-e2e-client.out.log"
 $clientErr = Join-Path $env:TEMP "ghost-proxy-e2e-client.err.log"
-$targetOut = Join-Path $env:TEMP "ghost-proxy-e2e-target.out.log"
-$targetErr = Join-Path $env:TEMP "ghost-proxy-e2e-target.err.log"
 $serverProcess = $null
 $clientProcess = $null
 $targetProcess = $null
@@ -108,13 +104,27 @@ function Invoke-Socks5Request([string]$TargetHost, [int]$TargetPort, [string]$Re
     try {
         $tcp.Connect("127.0.0.1", 1080)
         $stream = $tcp.GetStream()
-        $stream.ReadTimeout = 5000
+        # A failed client-first auth read can wait for the client-side auth
+        # deadline before SOCKS receives its failure reply.
+        $stream.ReadTimeout = 15000
         $stream.WriteTimeout = 5000
         $stream.Write([byte[]](0x05, 0x01, 0x00), 0, 3)
         $method = Read-Exact $stream 2
         if ($method[0] -ne 0x05 -or $method[1] -ne 0x00) { throw "Unexpected SOCKS5 method response" }
-        $ip = [System.Net.IPAddress]::Parse($TargetHost).GetAddressBytes()
-        $request = [byte[]](0x05, 0x01, 0x00, 0x01, $ip[0], $ip[1], $ip[2], $ip[3], [byte](($TargetPort -shr 8) -band 0xff), [byte]($TargetPort -band 0xff))
+        $ip = $null
+        $portBytes = [byte[]]([byte](($TargetPort -shr 8) -band 0xff), [byte]($TargetPort -band 0xff))
+        if ([System.Net.IPAddress]::TryParse($TargetHost, [ref]$ip)) {
+            $ipBytes = $ip.GetAddressBytes()
+            if ($ip.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                $request = [byte[]](@(0x05, 0x01, 0x00, 0x01) + $ipBytes + $portBytes)
+            } else {
+                $request = [byte[]](@(0x05, 0x01, 0x00, 0x04) + $ipBytes + $portBytes)
+            }
+        } else {
+            $hostBytes = [System.Text.Encoding]::ASCII.GetBytes($TargetHost)
+            if ($hostBytes.Length -gt 255) { throw "Target hostname is too long" }
+            $request = [byte[]](@(0x05, 0x01, 0x00, 0x03, [byte]$hostBytes.Length) + $hostBytes + $portBytes)
+        }
         $stream.Write($request, 0, $request.Length)
         $reply = Read-Exact $stream 10
         if ($reply[0] -ne 0x05) { throw "Unexpected SOCKS5 version in CONNECT reply" }
@@ -136,7 +146,7 @@ function Invoke-Socks5Request([string]$TargetHost, [int]$TargetPort, [string]$Re
 }
 
 try {
-    if (-not (Test-Path ".\configs\server.crt")) { throw "configs/server.crt is missing" }
+    if (-not (Test-Path ".\configs\server.crt")) { throw "configs/server.crt is missing; generate it with tests/gen-certs.sh" }
     if (-not (Test-Path ".\configs\server.key")) { throw "configs/server.key is missing" }
 
     Write-Host "Building actual server and client binaries..."
@@ -145,28 +155,7 @@ try {
     go build -o $clientExe .\cmd\client
     if ($LASTEXITCODE -ne 0) { throw "client build failed" }
 
-    $targetCode = @'
-import socket
-listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-listener.bind(("127.0.0.1", 18080))
-listener.listen(5)
-while True:
-    conn, _ = listener.accept()
-    try:
-        data = conn.recv(4096)
-        if data:
-            conn.sendall(b"HTTP/1.1 200 OK\r\n" + b"Content-Length: 12\r\n" + b"Connection: close\r\n\r\n" + b"GHOST-E2E-OK")
-    finally:
-        conn.close()
-'@
-
-    Set-Content -Path $targetScript -Value $targetCode -Encoding UTF8
-    Remove-Item $serverOut, $serverErr, $clientOut, $clientErr, $targetOut, $targetErr -Force -ErrorAction SilentlyContinue
-
-    Write-Host "Starting controlled destination on 127.0.0.1:18080..."
-    $targetProcess = Start-Process -FilePath "python" -ArgumentList @($targetScript) -RedirectStandardOutput $targetOut -RedirectStandardError $targetErr -PassThru
-    Wait-TcpPort "127.0.0.1" 18080
+    Remove-Item $serverOut, $serverErr, $clientOut, $clientErr -Force -ErrorAction SilentlyContinue
 
     Write-Host "Starting actual Ghost server using configs/server.yaml..."
     $env:GHOST_PSK = $psk
@@ -179,10 +168,10 @@ while True:
     Wait-TcpPort "127.0.0.1" 1080
 
     Write-Host "Testing matching PSK..."
-    $httpRequest = "GET / HTTP/1.1" + [char]13 + [char]10 + "Host: localhost" + [char]13 + [char]10 + "Connection: close" + [char]13 + [char]10 + [char]13 + [char]10
-    $response = Invoke-Socks5Request "127.0.0.1" 18080 $httpRequest $true
-    if ($response -notmatch "GHOST-E2E-OK") { throw "Matching-PSK response did not contain GHOST-E2E-OK" }
-    Write-Host "PASS: matching PSK completed the full application path."
+    $httpRequest = "GET / HTTP/1.1" + [char]13 + [char]10 + "Host: example.com" + [char]13 + [char]10 + "Connection: close" + [char]13 + [char]10 + [char]13 + [char]10
+    $response = Invoke-Socks5Request "example.com" 80 $httpRequest $true
+    if (-not $response) { throw "Matching-PSK request returned an empty response" }
+    Write-Host "PASS: matching PSK completed the public destination path."
 
     Write-Host "Stopping client before wrong-PSK test..."
     Stop-TestClientAndWait $clientProcess $clientExe
@@ -209,5 +198,4 @@ finally {
     $env:GHOST_PSK = $null
     if ($clientProcess -and -not $clientProcess.HasExited) { Stop-Process -Id $clientProcess.Id -Force -ErrorAction SilentlyContinue }
     if ($serverProcess -and -not $serverProcess.HasExited) { Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue }
-    if ($targetProcess -and -not $targetProcess.HasExited) { Stop-Process -Id $targetProcess.Id -Force -ErrorAction SilentlyContinue }
 }

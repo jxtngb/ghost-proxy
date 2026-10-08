@@ -1,78 +1,76 @@
 package gateway
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
-	"github.com/jxtngb/ghost-proxy/pkg/crypto"
+	ghostcrypto "github.com/jxtngb/ghost-proxy/pkg/crypto"
 	"github.com/jxtngb/ghost-proxy/pkg/frame"
 )
 
-// ErrAuthFailed is returned for every authentication failure. Callers
-// (later: the Nginx fallback) should not need to know why it failed.
 var ErrAuthFailed = errors.New("gateway: authentication failed")
+var authTimeout = 5 * time.Second
 
-// authTimeout bounds the whole handshake so a silent peer cannot hold
-// a connection open forever.
-var authTimeout = 10 * time.Second
-
-// Authenticate runs the server side of the challenge-response handshake
-// over conn:
+// Authenticate runs the deprecated server-first handshake for compatibility.
 //
-//	server -> client: TypeAuthChallenge, 32-byte challenge
-//	client -> server: TypeAuthResponse, AEAD(dataKey, HMAC(authKey, challenge))
-//
-// It returns nil only if the response verifies. TLS is not involved here;
-// the caller supplies the session already derived from PSK + exporter.
+// Deprecated: production handlers should use AuthenticateReplay.
 func (s *AuthSession) Authenticate(conn net.Conn) error {
+	// Deprecated legacy challenge exchange retained for protocol migration tests.
 	if err := conn.SetDeadline(time.Now().Add(authTimeout)); err != nil {
-		return fmt.Errorf("gateway: set deadline: %w", err)
+		return err
 	}
 	defer conn.SetDeadline(time.Time{})
-
 	challenge, err := s.Challenge()
 	if err != nil {
-		return fmt.Errorf("gateway: generate challenge: %w", err)
+		return err
 	}
-
 	nc, err := frame.NewNonceCounter()
 	if err != nil {
 		return err
 	}
-	if err := frame.WriteFrame(conn, &frame.Frame{
-		Type:       frame.TypeAuthChallenge,
-		Nonce:      nc.Next(),
-		Ciphertext: challenge,
-	}); err != nil {
-		return fmt.Errorf("gateway: send challenge: %w", err)
+	if err := frame.WriteFrame(conn, &frame.Frame{Type: frame.TypeAuthChallenge, Nonce: nc.Next(), Ciphertext: challenge}); err != nil {
+		return err
 	}
-
 	f, err := frame.ReadFrame(conn)
-	if err != nil {
-		return fmt.Errorf("%w: read response: %v", ErrAuthFailed, err)
-	}
-	if f.Type != frame.TypeAuthResponse {
+	if err != nil || f.Type != frame.TypeAuthResponse {
 		return ErrAuthFailed
 	}
-
-	aead, err := crypto.NewAEAD(s.DataKey())
+	aead, err := ghostcrypto.NewAEAD(s.DataKey())
 	if err != nil {
-		return fmt.Errorf("gateway: init aead: %w", err)
+		return err
 	}
 	response, err := aead.Open(f.Nonce[:], f.Ciphertext, []byte{f.Type})
 	if err != nil {
 		return ErrAuthFailed
 	}
-
 	ok, err := s.VerifyResponse(challenge, response)
 	if err != nil || !ok {
 		return ErrAuthFailed
 	}
+	return frame.WriteFrame(conn, &frame.Frame{Type: frame.TypeAuthSuccess})
+}
 
-	if err := frame.WriteFrame(conn, &frame.Frame{Type: frame.TypeAuthSuccess}); err != nil {
-		return fmt.Errorf("gateway: send authentication success: %w", err)
+// AuthenticateReplay reads the client's proof as the first TLS application
+// frame. It returns a reader that replays every consumed byte on failure.
+func (s *AuthSession) AuthenticateReplay(conn net.Conn) (io.Reader, error) {
+	if err := conn.SetReadDeadline(time.Now().Add(authTimeout)); err != nil {
+		return nil, err
 	}
-	return nil
+	defer conn.SetReadDeadline(time.Time{})
+	br := bufio.NewReader(conn)
+	var seen bytes.Buffer
+	f, err := frame.ReadFrame(io.TeeReader(br, &seen))
+	replay := io.MultiReader(bytes.NewReader(seen.Bytes()), br)
+	if err != nil || f.Type != frame.TypeAuthResponse || !ghostcrypto.VerifyClientProof(s.authKey, f.Ciphertext) {
+		return replay, ErrAuthFailed
+	}
+	if err := frame.WriteFrame(conn, &frame.Frame{Type: frame.TypeAuthSuccess}); err != nil {
+		return replay, fmt.Errorf("gateway: send authentication success: %w", err)
+	}
+	return nil, nil
 }
