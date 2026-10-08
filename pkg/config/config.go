@@ -8,11 +8,16 @@ import (
 )
 
 type Config struct {
-	ListenAddress string `yaml:"listen_address"`
-	ServerAddress string `yaml:"server_address"`
-	LogLevel      string `yaml:"log_level"`
-	CertFile      string `yaml:"cert_file"`
-	KeyFile       string `yaml:"key_file"`
+	ListenAddress   string `yaml:"listen_address"`
+	ServerAddress   string `yaml:"server_address"`
+	ServerName      string `yaml:"server_name"`
+	CAFile          string `yaml:"ca_file"`
+	LogLevel        string `yaml:"log_level"`
+	CertFile        string `yaml:"cert_file"`
+	KeyFile         string `yaml:"key_file"`
+	FallbackAddress string `yaml:"fallback_address"`
+	PaddingEnabled  bool   `yaml:"padding_enabled"`
+	JitterMS        int    `yaml:"jitter_ms"`
 }
 
 func Load(path string) (Config, error) {

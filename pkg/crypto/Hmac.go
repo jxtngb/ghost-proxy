@@ -7,6 +7,23 @@ import (
 	"errors"
 )
 
+const ClientAuthContext = "ghost-protocol/client-first-auth/v1"
+
+// ClientProof binds possession of the PSK to the TLS exporter-derived auth key.
+func ClientProof(authKey []byte) ([]byte, error) {
+	if len(authKey) == 0 {
+		return nil, errors.New("crypto: authKey must not be empty")
+	}
+	mac := hmac.New(sha256.New, authKey)
+	_, _ = mac.Write([]byte(ClientAuthContext))
+	return mac.Sum(nil), nil
+}
+
+func VerifyClientProof(authKey, proof []byte) bool {
+	expected, err := ClientProof(authKey)
+	return err == nil && hmac.Equal(expected, proof)
+}
+
 // ChallengeSize is the length of the server's random challenge nonce,
 // per spec ("32-byte random challenge nonce").
 const ChallengeSize = 32

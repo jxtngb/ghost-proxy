@@ -36,6 +36,10 @@ func TLSConfig(serverName string) *utls.Config {
 func TLSConfigWithRootCA(serverName, certFile string) (*utls.Config, error) {
 	config := TLSConfig(serverName)
 
+	if certFile == "" {
+		return config, nil
+	}
+
 	certPEM, err := os.ReadFile(certFile)
 	if err != nil {
 		return nil, fmt.Errorf("ghost-proxy: read CA certificate: %w", err)

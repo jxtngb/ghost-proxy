@@ -20,6 +20,8 @@ const KeySize = 32
 const (
 	InfoDataKey = "ghost-protocol/data-key/v1"
 	InfoAuthKey = "ghost-protocol/auth-key/v1"
+	InfoC2SKey  = "ghost-protocol/data-key/c2s/v1"
+	InfoS2CKey  = "ghost-protocol/data-key/s2c/v1"
 )
 
 // DeriveKey runs HKDF-SHA256 over the given secret material, mixing in
@@ -60,4 +62,18 @@ func DeriveSessionKeys(psk, exporterMaterial []byte) (dataKey, authKey []byte, e
 		return nil, nil, err
 	}
 	return dataKey, authKey, nil
+}
+
+// DeriveDirectionalKeys returns independent client-to-server and server-to-client keys.
+func DeriveDirectionalKeys(psk, exporterMaterial []byte) (c2s, s2c, auth []byte, err error) {
+	c2s, err = DeriveKey(psk, exporterMaterial, InfoC2SKey)
+	if err != nil {
+		return
+	}
+	s2c, err = DeriveKey(psk, exporterMaterial, InfoS2CKey)
+	if err != nil {
+		return
+	}
+	auth, err = DeriveKey(psk, exporterMaterial, InfoAuthKey)
+	return
 }
